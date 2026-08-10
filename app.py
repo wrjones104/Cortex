@@ -167,7 +167,7 @@ def get_project_context(query: str, project_name: str, n_results: int = 5):
         logger.exception("Failed to retrieve project context for query %r", query)
         return "", f"{type(e).__name__}: {e}"
 
-def process_brain_dump(raw_text: str, project_name: str, context: str, output_container, librarian_model: str):
+def process_brain_dump(raw_text: str, project_name: str, context: str, librarian_model: str):
     proj_directive = f"Project Name: '{project_name}'" if project_name else "Project Name: NONE (You must invent a fitting project name based on the content)"
 
     system_prompt = f"""
@@ -209,12 +209,14 @@ def process_brain_dump(raw_text: str, project_name: str, context: str, output_co
         )
 
         full_response = ""
-        for chunk in response_stream:
-            if 'message' in chunk and 'content' in chunk['message']:
-                full_response += chunk['message']['content']
-                output_container.markdown(f"**Under the hood (Raw JSON Output):**\n```json\n{full_response}▌\n```")
+        with st.status("Analyzing and categorizing...", expanded=False) as status:
+            for chunk in response_stream:
+                if 'message' in chunk and 'content' in chunk['message']:
+                    full_response += chunk['message']['content']
+            status.update(label="Analysis complete", state="complete")
 
-        output_container.markdown(f"**Under the hood (Raw JSON Output):**\n```json\n{full_response}\n```")
+        with st.expander("Show raw model output"):
+            st.code(full_response, language="json")
 
         try:
             return json.loads(full_response)
@@ -381,9 +383,7 @@ with tab1:
             if ctx_error:
                 st.warning(f"⚠️ Continuing without project context — {ctx_error}")
 
-            stream_container = st.empty()
-
-            parsed_data = process_brain_dump(user_dump, project_input, context, stream_container, st.session_state.librarian_model)
+            parsed_data = process_brain_dump(user_dump, project_input, context, st.session_state.librarian_model)
 
             if "error" in parsed_data:
                 st.error(f"Failed to process: {parsed_data['error']}")
@@ -436,7 +436,11 @@ with tab2:
 
             st.divider()
             st.markdown("### ✏️ Manage Records")
-            edit_id = st.selectbox("Select a Record ID to Edit or Delete:", [None] + df['id'].tolist())
+            edit_id = st.selectbox(
+                "Select a Record to Edit or Delete:",
+                [None] + df['id'].tolist(),
+                format_func=lambda x: "—" if x is None else f"#{x} — {df.loc[df['id'] == x, 'title'].iloc[0]}"
+            )
 
             if edit_id:
                 record = df[df['id'] == edit_id].iloc[0]
@@ -537,12 +541,11 @@ with tab3:
         st.write(st.session_state['generated_idea'])
 
         if st.button("Vault This Concept", type="primary"):
-            structuring_container = st.empty()
             context, ctx_error = get_project_context(st.session_state['generated_idea'], gen_project) if gen_project else ("", None)
             if ctx_error:
                 st.warning(f"⚠️ Continuing without project context — {ctx_error}")
 
-            parsed_data = process_brain_dump(st.session_state['generated_idea'], gen_project, context, structuring_container, st.session_state.librarian_model)
+            parsed_data = process_brain_dump(st.session_state['generated_idea'], gen_project, context, st.session_state.librarian_model)
 
             if "error" in parsed_data:
                 st.error(f"Failed to process: {parsed_data['error']}")
@@ -569,6 +572,10 @@ with tab4:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            if message.get("sources"):
+                with st.expander(f"📎 Sources ({len(message['sources'])})"):
+                    for src in message["sources"]:
+                        st.markdown(f"- {src}")
 
     if prompt := st.chat_input("Ask about your projects..."):
         st.chat_message("user").markdown(prompt)
@@ -605,7 +612,14 @@ with tab4:
                         stream_container.markdown(full_response + "▌")
 
                 stream_container.markdown(full_response)
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
+
+                sources = re.findall(r'\[([^\]]+)\]:', retrieved_context) if retrieved_context else []
+                if sources:
+                    with st.expander(f"📎 Sources ({len(sources)})"):
+                        for src in sources:
+                            st.markdown(f"- {src}")
+
+                st.session_state.messages.append({"role": "assistant", "content": full_response, "sources": sources})
 
             except Exception as e:
                 logger.exception("Chat failed")

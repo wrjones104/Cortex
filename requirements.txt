@@ -1,0 +1,4 @@
+streamlit==1.56.0
+chromadb==1.5.7
+ollama==0.6.1
+pandas==3.0.2

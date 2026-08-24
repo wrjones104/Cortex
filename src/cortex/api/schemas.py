@@ -150,3 +150,28 @@ class StatusOut(BaseModel):
     ollama_reachable: bool
     ollama_detail: str | None = None
     models: list[ModelStatus] = []
+
+
+class ModelInfo(BaseModel):
+    name: str
+    parameter_size: str | None = None
+    capabilities: list[str] = []
+    can_chat: bool
+    can_embed: bool
+    can_think: bool
+
+
+class SettingsOut(BaseModel):
+    librarian_model: str
+    creative_model: str
+    embed_model: str
+    embed_model_locked: bool = Field(
+        default=True,
+        description="The embedding model is fixed by the vector index. "
+        "Changing it invalidates every vector, so it needs `cortex reindex`.",
+    )
+
+
+class SettingsPatch(BaseModel):
+    librarian_model: str | None = None
+    creative_model: str | None = None

@@ -58,7 +58,7 @@ def live_server(tmp_path, embedder, monkeypatch):
 
     deps.configure(Config(data_dir=tmp_path, embed_model="fake-embed"), TOKEN)
     monkeypatch.setattr(deps, "_embedder", embedder)
-    monkeypatch.setattr(deps, "_librarian", librarian)
+    monkeypatch.setattr(deps, "_librarian_override", librarian)
 
     port = _free_port()
     server = uvicorn.Server(

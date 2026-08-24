@@ -151,3 +151,25 @@ def test_the_api_works_against_real_models(tmp_path, real_embedder):
             "/api/search", params={"q": "sourdough starter hydration ratios"}
         ).json()["hits"]
         assert absent == []
+
+
+def test_real_ollama_reports_capabilities(ollama_available):
+    """Catches the silent-drop bug against the real server.
+
+    The fake-backed unit test pins the parsing; this pins the assumption that
+    Ollama actually sends capabilities in the first place.
+    """
+    if not ollama_available:
+        pytest.skip("Ollama is not reachable")
+
+    from cortex.settings import installed_models
+
+    models = installed_models(Config.from_env().ollama_host)
+
+    assert models, "no models installed"
+    assert any(m["can_chat"] for m in models), "no chat-capable model reported"
+    assert all(isinstance(m["capabilities"], list) for m in models)
+    # An embedding model must never be offered as a chat model.
+    for model in models:
+        if model["can_embed"] and "completion" not in model["capabilities"]:
+            assert not model["can_chat"]

@@ -284,3 +284,91 @@ def test_integrity_report_flags_a_record_whose_chunks_went_missing(conn, embedde
     report = integrity_report(conn)
     assert report["records_without_chunks"] == 3
     assert report["vectors_without_chunks"] > 0
+
+
+def test_settings_fall_back_to_config_then_prefer_the_vault(conn):
+    from cortex.config import Config
+    from cortex.settings import get_settings, set_settings
+
+    config = Config(librarian_model="from-config", creative_model="also-config")
+
+    assert get_settings(conn, config).librarian_model == "from-config"
+
+    set_settings(conn, librarian_model="from-vault")
+    assert get_settings(conn, config).librarian_model == "from-vault"
+    assert get_settings(conn, config).creative_model == "also-config"
+
+
+def test_setting_an_unknown_key_is_refused(conn):
+    from cortex.settings import set_settings
+
+    with pytest.raises(ValueError, match="Not a changeable setting"):
+        set_settings(conn, embed_model="sneaky")
+
+
+def test_blank_settings_are_ignored_rather_than_stored(conn):
+    from cortex.config import Config
+    from cortex.settings import get_settings, set_settings
+
+    config = Config(librarian_model="from-config")
+    set_settings(conn, librarian_model="   ")
+    assert get_settings(conn, config).librarian_model == "from-config"
+
+
+# --- model capabilities ----------------------------------------------------
+
+
+def test_normalise_model_treats_a_bare_name_as_latest():
+    from cortex.settings import normalise_model
+
+    assert normalise_model("embeddinggemma") == "embeddinggemma:latest"
+    assert normalise_model("qwen2.5:14b") == "qwen2.5:14b"
+    assert normalise_model("  gemma4:12b  ") == "gemma4:12b"
+
+
+def test_installed_models_reads_capabilities(monkeypatch):
+    """The regression guard for a silent failure.
+
+    /api/tags returns a `capabilities` array, but ollama.Client.list() maps
+    the response onto a typed Model that has no such field, so going through
+    the client drops it and every model looks incapable of everything - which
+    left the settings UI offering nothing at all.
+    """
+    import httpx
+
+    payload = {
+        "models": [
+            {
+                "model": "qwen2.5:14b",
+                "details": {"parameter_size": "14.8B"},
+                "capabilities": ["completion", "tools"],
+            },
+            {
+                "model": "embeddinggemma:latest",
+                "details": {"parameter_size": "307M"},
+                "capabilities": ["embedding"],
+            },
+            {"model": "mystery:1b", "details": {}},
+        ]
+    }
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return payload
+
+    monkeypatch.setattr(httpx, "get", lambda url, timeout=None: FakeResponse())
+
+    from cortex.settings import installed_models
+
+    models = {m["name"]: m for m in installed_models("http://x")}
+
+    assert models["qwen2.5:14b"]["can_chat"] is True
+    assert models["qwen2.5:14b"]["can_embed"] is False
+    assert models["embeddinggemma:latest"]["can_embed"] is True
+    assert models["embeddinggemma:latest"]["can_chat"] is False
+    # A model reporting nothing is treated as capable of nothing, not everything.
+    assert models["mystery:1b"]["capabilities"] == []
+    assert models["mystery:1b"]["can_chat"] is False

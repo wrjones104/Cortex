@@ -49,11 +49,14 @@ def open_readonly(config: Config) -> sqlite3.Connection:
 
 def open_vault(config: Config) -> Vault:
     """Open a vault ready for indexing. Requires Ollama to be reachable."""
+    from .settings import get_settings
+
     conn = connect(config.db_path)
     try:
         migrate(conn)
         embedder = OllamaEmbedder(config.ollama_host, config.embed_model)
         ensure_vector_index(conn, embedder.model, embedder.dim)
+        settings = get_settings(conn, config)
     except BaseException:
         conn.close()
         raise
@@ -62,5 +65,5 @@ def open_vault(config: Config) -> Vault:
         conn=conn,
         config=config,
         embedder=embedder,
-        librarian=OllamaLibrarian(config.ollama_host, config.librarian_model),
+        librarian=OllamaLibrarian(config.ollama_host, settings.librarian_model),
     )

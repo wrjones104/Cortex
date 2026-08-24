@@ -25,7 +25,7 @@ def client(tmp_path, embedder, librarian, monkeypatch):
     # The API builds its own model clients at configure() time; swap in the
     # deterministic fakes so the suite never touches Ollama.
     monkeypatch.setattr(deps, "_embedder", embedder)
-    monkeypatch.setattr(deps, "_librarian", librarian)
+    monkeypatch.setattr(deps, "_librarian_override", librarian)
 
     with TestClient(create_app()) as test_client:
         test_client.headers.update({"Authorization": f"Bearer {TOKEN}"})
@@ -434,3 +434,89 @@ def test_cors_does_not_allow_credentials(client):
     """Allowing any origin is only safe because no cookie can ride along."""
     response = client.get("/api/records", headers={"Origin": "http://evil.example"})
     assert "access-control-allow-credentials" not in response.headers
+
+
+# --- models and settings ---------------------------------------------------
+
+
+@pytest.fixture
+def fake_models(monkeypatch):
+    """Stand in for Ollama's model listing, capabilities and all."""
+    catalogue = [
+        {"name": "qwen2.5:14b", "parameter_size": "14.8B",
+         "capabilities": ["completion", "tools"],
+         "can_chat": True, "can_embed": False, "can_think": False},
+        {"name": "gemma4:12b", "parameter_size": "11.9B",
+         "capabilities": ["completion", "thinking"],
+         "can_chat": True, "can_embed": False, "can_think": True},
+        {"name": "embeddinggemma", "parameter_size": "307M",
+         "capabilities": ["embedding"],
+         "can_chat": False, "can_embed": True, "can_think": False},
+    ]
+    import cortex.api.app as app_module
+
+    monkeypatch.setattr(app_module, "installed_models", lambda host: catalogue)
+    return catalogue
+
+
+def test_models_lists_capabilities(client, fake_models):
+    body = client.get("/api/models").json()
+    assert {m["name"] for m in body} == {"qwen2.5:14b", "gemma4:12b", "embeddinggemma"}
+    assert [m["name"] for m in body if m["can_chat"]] == ["qwen2.5:14b", "gemma4:12b"]
+    assert [m["name"] for m in body if m["can_embed"]] == ["embeddinggemma"]
+
+
+def test_models_reports_ollama_being_down_as_503(client, monkeypatch):
+    import cortex.api.app as app_module
+
+    def boom(host):
+        raise ConnectionError("nope")
+
+    monkeypatch.setattr(app_module, "installed_models", boom)
+    assert client.get("/api/models").status_code == 503
+
+
+def test_settings_start_from_config(client):
+    body = client.get("/api/settings").json()
+    assert body["librarian_model"] == "qwen2.5:14b"
+    assert body["embed_model_locked"] is True
+
+
+def test_settings_can_be_changed_and_persist(client, fake_models):
+    updated = client.patch("/api/settings", json={"librarian_model": "gemma4:12b"})
+    assert updated.status_code == 200
+    assert updated.json()["librarian_model"] == "gemma4:12b"
+    # Read back through a fresh request, so it came from the vault not memory.
+    assert client.get("/api/settings").json()["librarian_model"] == "gemma4:12b"
+
+
+def test_an_embedding_model_cannot_be_selected_as_a_chat_model(client, fake_models):
+    """The prototype allowed exactly this, and it failed with a 400 the next
+    time you tried to generate anything."""
+    response = client.patch("/api/settings", json={"librarian_model": "embeddinggemma"})
+    assert response.status_code == 422
+    assert "does not support chat" in response.json()["detail"]
+    assert client.get("/api/settings").json()["librarian_model"] == "qwen2.5:14b"
+
+
+def test_an_uninstalled_model_is_rejected(client, fake_models):
+    response = client.patch("/api/settings", json={"librarian_model": "llama99:700b"})
+    assert response.status_code == 422
+
+
+def test_settings_are_left_alone_when_ollama_cannot_be_reached(client, monkeypatch):
+    """Unable to validate is not the same as invalid - but do not guess."""
+    import cortex.api.app as app_module
+
+    def boom(host):
+        raise ConnectionError("nope")
+
+    monkeypatch.setattr(app_module, "installed_models", boom)
+    response = client.patch("/api/settings", json={"librarian_model": "anything:1b"})
+    assert response.status_code == 200
+    assert response.json()["librarian_model"] == "anything:1b"
+
+
+def test_an_empty_patch_changes_nothing(client):
+    before = client.get("/api/settings").json()
+    assert client.patch("/api/settings", json={}).json() == before

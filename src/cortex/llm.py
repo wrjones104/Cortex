@@ -16,6 +16,8 @@ from typing import Any, Protocol
 
 import ollama
 
+from .ollama_client import client_for
+
 LIBRARIAN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -98,14 +100,11 @@ class OllamaLibrarian:
     def __init__(self, host: str, model: str) -> None:
         self.model = model
         self.host = host
-        self._cached_client: ollama.Client | None = None
 
     @property
     def _client(self) -> ollama.Client:
-        """Built on first use - see the note in embed.OllamaEmbedder."""
-        if self._cached_client is None:
-            self._cached_client = ollama.Client(host=self.host)
-        return self._cached_client
+        """Shared per host - see the note in embed.OllamaEmbedder."""
+        return client_for(self.host)
 
     def structure(
         self, raw_text: str, *, project: str | None = None, context: str = ""

@@ -24,21 +24,23 @@ from ..db import StoreError, connect
 from ..embed import EmbeddingError, OllamaEmbedder
 from ..llm import OllamaLibrarian
 from ..migrations import ensure_vector_index, migrate
+from ..settings import get_settings
 from ..vault import Vault
 
 _config: Config | None = None
 _token: str | None = None
 _embedder: OllamaEmbedder | None = None
-_librarian: OllamaLibrarian | None = None
+# Tests inject a fake here; in normal use the Librarian comes from settings.
+_librarian_override: object | None = None
 
 
 def configure(config: Config, token: str | None = None) -> str:
     """Bind the process to one vault. Returns the active API token."""
-    global _config, _token, _embedder, _librarian
+    global _config, _token, _embedder, _librarian_override
     _config = config
     _token = token or load_or_create_token(config.data_dir)
     _embedder = OllamaEmbedder(config.ollama_host, config.embed_model)
-    _librarian = OllamaLibrarian(config.ollama_host, config.librarian_model)
+    _librarian_override = None
     return _token
 
 
@@ -92,16 +94,23 @@ def build_vault(config: Config) -> Vault:
     belong to the thread that created them. The streaming endpoint does its
     work on a worker thread and so opens its own.
     """
-    assert _embedder is not None and _librarian is not None
+    assert _embedder is not None
 
     conn = connect(config.db_path)
     try:
         migrate(conn)
         ensure_vector_index(conn, _embedder.model, _embedder.dim)
+        # Model routing is a runtime setting, so the Librarian is resolved per
+        # request. Ollama clients are shared per host, so this is nearly free.
+        settings = get_settings(conn, config)
     except BaseException:
         conn.close()
         raise
-    return Vault(conn=conn, config=config, embedder=_embedder, librarian=_librarian)
+
+    librarian = _librarian_override or OllamaLibrarian(
+        config.ollama_host, settings.librarian_model
+    )
+    return Vault(conn=conn, config=config, embedder=_embedder, librarian=librarian)
 
 
 def get_vault() -> Iterator[Vault]:

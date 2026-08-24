@@ -12,6 +12,8 @@ from typing import Protocol, runtime_checkable
 
 import ollama
 
+from .ollama_client import client_for
+
 
 class EmbeddingError(RuntimeError):
     """Raised when text could not be embedded."""
@@ -34,21 +36,17 @@ class OllamaEmbedder:
         self.model = model
         self.host = host
         self.batch_size = batch_size
-        self._cached_client: ollama.Client | None = None
         self._dim: int | None = None
 
     @property
     def _client(self) -> ollama.Client:
-        """Built on first use.
+        """Fetched on first use, and shared with every other caller on this host.
 
         Constructing an ollama.Client builds an httpx.Client, which loads a
-        default SSL context - around 170 ms. Half the things that hold an
-        embedder never call a model at all, so paying that at construction
-        time is pure latency on startup.
+        default SSL context - around 170 ms. Plenty of things hold an embedder
+        without ever calling a model, so that should not be paid up front.
         """
-        if self._cached_client is None:
-            self._cached_client = ollama.Client(host=self.host)
-        return self._cached_client
+        return client_for(self.host)
 
     @property
     def dim(self) -> int:

@@ -7,9 +7,9 @@ design docs, half-formed ideas — files them with a local LLM, and makes them f
 by meaning and by keyword. It runs entirely on [Ollama](https://ollama.com) and SQLite.
 Nothing leaves your computer.
 
-> **Status: rebuild in progress.** Milestones 1 and 2 are complete and tested:
-> the storage core, the CLI, and the HTTP API. The web client is next — see
-> [Build order](#build-order).
+> **Status: rebuild in progress.** Milestones 1–3 are complete: the storage core,
+> the CLI, the HTTP API, and an installable web client that runs on the desktop and
+> the phone. Chat and creative generation are next — see [Build order](#build-order).
 
 ---
 
@@ -189,6 +189,47 @@ Ollama itself stays on `127.0.0.1` and is never exposed — only Cortex talks to
 
 ---
 
+## The web app
+
+One client for every device: a browser tab on the desktop, an installed app on the
+phone. Both talk to the same API.
+
+```bash
+cortex serve              # terminal 1
+npm run dev --prefix web  # terminal 2, opens http://localhost:5173
+```
+
+On first run it asks for the server address and your token (`cortex token`), and
+remembers them. Three screens:
+
+- **Capture** — type, pick a project, save. Progress streams in while the model
+  works. Drafts survive a browser restart, and Ctrl/Cmd+Enter saves.
+- **Vault** — hybrid search across everything, filter by project, read, edit, delete.
+  Each result says whether it matched by meaning, by keyword, or both.
+- **Settings** — model routing, vault health, index integrity.
+
+Model routing is stored in the vault rather than the environment, so changing your
+Librarian is a click and takes effect immediately. Only chat-capable models are
+offered — Ollama reports what each model can do, so an embedding model can no longer
+be selected as a chat model.
+
+### Installing it on a phone
+
+Build once and serve the static files:
+
+```bash
+npm run build --prefix web
+```
+
+Open the app on your phone and use "Add to Home Screen". The app shell is cached by a
+service worker, so it opens instantly. Point it at your Tailscale address, and Cortex
+travels with you.
+
+> Offline *capture* — queueing notes with no signal and syncing later — is M6. The
+> API side is already built (`POST /api/sync`); the client queue is not.
+
+---
+
 ## Configuration
 
 All optional — the defaults work.
@@ -228,6 +269,9 @@ rather than pretending one number fits. Set `CORTEX_MAX_DISTANCE` to override.
 pytest                  # unit tests, no model server needed
 pytest -m ollama        # integration tests against real models
 ruff check src tests
+
+npm run build --prefix web   # typechecks as part of the build
+npx oxlint web/src
 ```
 
 The suite runs offline: `Embedder` and `Librarian` are protocols, and the tests inject
@@ -250,10 +294,17 @@ src/cortex/
   port.py         import, export, backup
   vault.py        opening a vault, with or without Ollama
   cli.py          the command line
+  settings.py     runtime model routing, stored in the vault
   api/
     app.py        routes
     deps.py       auth and per-request resources
     schemas.py    the wire contract
+
+web/
+  src/
+    lib/api.ts    typed client, including the SSE reader
+    screens/      Capture, Vault, RecordDetail, Settings, Setup
+    index.css     design tokens, mobile-first, both themes
 ```
 
 `core` knows nothing about HTTP or any UI. The API and web client will be thin layers
@@ -267,8 +318,8 @@ over it.
 |---|---|---|
 | **M1** | Storage core, hybrid search, CLI | ✅ done |
 | **M2** | FastAPI: REST + SSE, bearer auth, batched sync | ✅ done |
-| **M3** | Web client: capture, vault, search — retires the Streamlit prototype | next |
-| **M4** | Chat with persistent threads and managed context | |
+| **M3** | Web client: capture, vault, search, settings | ✅ done |
+| **M4** | Chat with persistent threads and managed context | next |
 | **M5** | Creative generation with selective banking | |
 | **M6** | Offline capture, installable PWA, share target, voice | |
 | **M7** | Packaging, Tailscale binding, first-run wizard | |
@@ -277,7 +328,11 @@ over it.
 
 `app.py` is the original single-file Streamlit app. It still runs
 (`streamlit run app.py`, dependencies in `requirements.txt`) and reads its own separate
-`memory_bank/` database. It is kept for reference and comes out at M3.
+`memory_bank/` database.
+
+The plan had it removed at M3, but the rebuild does not cover chat (M4) or creative
+generation (M5) yet, so it is kept until those land rather than dropping working
+features. Nothing depends on it.
 
 ## Privacy
 

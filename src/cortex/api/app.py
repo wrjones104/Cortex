@@ -23,6 +23,7 @@ from ..config import Config
 from ..embed import EmbeddingError
 from ..llm import LibrarianError
 from ..retrieve import search as search_vault
+from ..settings import get_settings, installed_models, normalise_model, set_settings
 from ..store import (
     DuplicateRecordError,
     RecordNotFoundError,
@@ -39,6 +40,7 @@ from . import deps
 from .schemas import (
     CaptureIn,
     CaptureOut,
+    ModelInfo,
     ModelStatus,
     ProjectOut,
     RecordList,
@@ -46,6 +48,8 @@ from .schemas import (
     RecordPatch,
     SearchHitOut,
     SearchOut,
+    SettingsOut,
+    SettingsPatch,
     StatusOut,
     SyncIn,
     SyncOut,
@@ -125,6 +129,82 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
             ollama_reachable=reachable,
             ollama_detail=detail,
             models=models if reachable else [],
+        )
+
+    @app.get(
+        "/api/models",
+        response_model=list[ModelInfo],
+        tags=["system"],
+        dependencies=[deps.Authed],
+    )
+    def get_models() -> list[ModelInfo]:
+        """Every installed model, with what it can actually do.
+
+        Clients filter on can_chat so an embedding model can never be picked
+        as a chat model - the prototype allowed exactly that, and it failed
+        with a 400 the next time you tried to generate anything.
+        """
+        config = deps.get_config()
+        try:
+            return [ModelInfo(**m) for m in installed_models(config.ollama_host)]
+        except Exception as exc:  # noqa: BLE001 - reported as unavailable
+            raise HTTPException(
+                status_code=503, detail=f"Could not reach Ollama: {exc}"
+            ) from exc
+
+    @app.get(
+        "/api/settings",
+        response_model=SettingsOut,
+        tags=["system"],
+        dependencies=[deps.Authed],
+    )
+    def get_current_settings(
+        conn: sqlite3.Connection = Depends(deps.get_conn),
+    ) -> SettingsOut:
+        settings = get_settings(conn, deps.get_config())
+        return SettingsOut(
+            librarian_model=settings.librarian_model,
+            creative_model=settings.creative_model,
+            embed_model=settings.embed_model,
+        )
+
+    @app.patch(
+        "/api/settings",
+        response_model=SettingsOut,
+        tags=["system"],
+        dependencies=[deps.Authed],
+    )
+    def patch_settings(
+        body: SettingsPatch, conn: sqlite3.Connection = Depends(deps.get_conn)
+    ) -> SettingsOut:
+        config = deps.get_config()
+        requested = body.model_dump(exclude_none=True)
+
+        if requested:
+            try:
+                chat_capable = {
+                    normalise_model(m["name"])
+                    for m in installed_models(config.ollama_host)
+                    if m["can_chat"]
+                }
+            except Exception:  # noqa: BLE001 - cannot validate, so do not guess
+                chat_capable = None
+
+            if chat_capable is not None:
+                for field, name in requested.items():
+                    if normalise_model(name) not in chat_capable:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"'{name}' cannot be used as the {field.split('_')[0]} "
+                            "model - it is not installed, or does not support chat.",
+                        )
+            set_settings(conn, **requested)
+
+        settings = get_settings(conn, config)
+        return SettingsOut(
+            librarian_model=settings.librarian_model,
+            creative_model=settings.creative_model,
+            embed_model=settings.embed_model,
         )
 
     # --- projects ----------------------------------------------------------

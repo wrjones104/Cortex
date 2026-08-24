@@ -1,6 +1,23 @@
+# Virtual environments
 venv/
+.venv/
+
+# Python
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Vault data - never commit your notes
 memory_bank/
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Local config
 .env
 .streamlit/secrets.toml

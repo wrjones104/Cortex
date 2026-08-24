@@ -1,0 +1,52 @@
+[project]
+name = "cortex"
+version = "0.2.0"
+description = "A local-first AI knowledge vault. Your notes, your machine, your models."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "ollama>=0.6.1",
+    "sqlite-vec>=0.1.9",
+    "typer>=0.15.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[project.scripts]
+cortex = "cortex.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cortex"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "ollama: integration test that needs a running Ollama server",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Function calls in argument defaults are how Typer declares CLI options.
+"src/cortex/cli.py" = ["B008"]

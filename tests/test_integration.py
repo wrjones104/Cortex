@@ -113,3 +113,41 @@ def test_real_capture_through_the_librarian(real_vault, real_embedder):
     assert result.record.category
     assert result.chunks >= 1
     assert "runners" in result.record.body
+
+
+def test_the_api_works_against_real_models(tmp_path, real_embedder):
+    """One end-to-end pass over HTTP with nothing faked."""
+    from fastapi.testclient import TestClient
+
+    from cortex.api import deps
+    from cortex.api.app import create_app
+
+    token = "integration-token"
+    config = Config(data_dir=tmp_path)
+    deps.configure(config, token)
+
+    with TestClient(create_app()) as client:
+        client.headers.update({"Authorization": f"Bearer {token}"})
+
+        created = client.post(
+            "/api/records",
+            json={
+                "text": "The ferryman's ledger lists every passenger since 1811, but three "
+                "names recur every decade with no explanation.",
+                "project": "Echoes",
+            },
+        )
+        assert created.status_code == 201, created.text
+        record = created.json()["record"]
+        assert record["title"]
+        assert record["category"]
+
+        # Semantic match with almost no shared vocabulary.
+        hits = client.get("/api/search", params={"q": "a record of travellers"}).json()["hits"]
+        assert any(h["record"]["id"] == record["id"] for h in hits)
+
+        # And the relevance floor holds with real vectors.
+        absent = client.get(
+            "/api/search", params={"q": "sourdough starter hydration ratios"}
+        ).json()["hits"]
+        assert absent == []

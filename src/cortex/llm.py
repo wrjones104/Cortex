@@ -97,7 +97,15 @@ def _extract_json(text: str) -> dict[str, Any]:
 class OllamaLibrarian:
     def __init__(self, host: str, model: str) -> None:
         self.model = model
-        self._client = ollama.Client(host=host)
+        self.host = host
+        self._cached_client: ollama.Client | None = None
+
+    @property
+    def _client(self) -> ollama.Client:
+        """Built on first use - see the note in embed.OllamaEmbedder."""
+        if self._cached_client is None:
+            self._cached_client = ollama.Client(host=self.host)
+        return self._cached_client
 
     def structure(
         self, raw_text: str, *, project: str | None = None, context: str = ""

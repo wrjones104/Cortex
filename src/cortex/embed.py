@@ -34,8 +34,21 @@ class OllamaEmbedder:
         self.model = model
         self.host = host
         self.batch_size = batch_size
-        self._client = ollama.Client(host=host)
+        self._cached_client: ollama.Client | None = None
         self._dim: int | None = None
+
+    @property
+    def _client(self) -> ollama.Client:
+        """Built on first use.
+
+        Constructing an ollama.Client builds an httpx.Client, which loads a
+        default SSL context - around 170 ms. Half the things that hold an
+        embedder never call a model at all, so paying that at construction
+        time is pure latency on startup.
+        """
+        if self._cached_client is None:
+            self._cached_client = ollama.Client(host=self.host)
+        return self._cached_client
 
     @property
     def dim(self) -> int:

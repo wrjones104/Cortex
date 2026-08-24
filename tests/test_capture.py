@@ -128,3 +128,36 @@ def test_capture_passes_context_to_the_librarian(conn, embedder, librarian, samp
 def test_context_can_be_switched_off(conn, embedder, librarian, sample_notes):
     capture(conn, embedder, "A note.", librarian=librarian, project="Echoes", use_context=False)
     assert librarian.last_context == ""
+
+
+def test_a_replayed_capture_is_reported_as_such(conn, embedder, librarian):
+    """The caller needs to distinguish a fresh write from a replay."""
+    first = capture(
+        conn, embedder, "Sent from the train.", librarian=librarian,
+        project="P", idempotency_key="queue-9",
+    )
+    assert first.already_stored is False
+
+    second = capture(
+        conn, embedder, "Sent from the train.", librarian=librarian,
+        project="P", idempotency_key="queue-9",
+    )
+    assert second.already_stored is True
+    assert second.record.id == first.record.id
+    assert second.chunks == first.chunks
+
+
+def test_a_replay_never_reaches_the_model(conn, embedder, librarian):
+    """A replayed batch of twenty notes must not re-run a 14B model twenty
+    times only to throw every result away."""
+    capture(
+        conn, embedder, "Sent from the train.", librarian=librarian,
+        project="P", idempotency_key="queue-10",
+    )
+    calls_after_first = librarian.calls
+
+    capture(
+        conn, embedder, "Sent from the train.", librarian=librarian,
+        project="P", idempotency_key="queue-10",
+    )
+    assert librarian.calls == calls_after_first

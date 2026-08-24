@@ -80,5 +80,6 @@ class SearchHit:
 class CaptureResult:
     record: Record
     chunks: int
-    duplicate_of: int | None = None
     warnings: list[str] = field(default_factory=list)
+    already_stored: bool = False
+    """True when an idempotency key matched, so nothing new was written."""

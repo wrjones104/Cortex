@@ -6,7 +6,9 @@ pipx install, or a container without editing source.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import secrets
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,9 +53,18 @@ class Config:
     # RRF paper and behaves well without tuning.
     rrf_k: int = 60
 
-    # Vector hits further away than this are dropped. Model-dependent — see
-    # the note on DEFAULT_MAX_DISTANCE in retrieve.py before changing it.
-    max_distance: float = 0.75
+    # Vector hits further away than this are dropped. None means "use the
+    # default for whichever embedding model is configured" — good values
+    # differ sharply between models; see MAX_DISTANCE_BY_MODEL in retrieve.py.
+    max_distance: float | None = None
+
+    @property
+    def effective_max_distance(self) -> float:
+        if self.max_distance is not None:
+            return self.max_distance
+        from .retrieve import max_distance_for
+
+        return max_distance_for(self.embed_model)
 
     @property
     def db_path(self) -> Path:
@@ -65,7 +76,7 @@ class Config:
 
     @classmethod
     def from_env(cls) -> Config:
-        def _float(name: str, fallback: float) -> float:
+        def _float(name: str, fallback: float | None) -> float | None:
             raw = os.environ.get(name)
             if raw is None or not raw.strip():
                 return fallback
@@ -94,3 +105,29 @@ class Config:
             chunk_overlap_tokens=_int("CORTEX_CHUNK_OVERLAP", cls.chunk_overlap_tokens),
             max_distance=_float("CORTEX_MAX_DISTANCE", cls.max_distance),
         )
+
+
+def load_or_create_token(data_dir: Path) -> str:
+    """Return the API bearer token, generating one on first run.
+
+    Kept in a file next to the vault rather than an env var so the token
+    survives a reboot and can be read back by `cortex token`. On POSIX the
+    file is chmod 600; Windows inherits the user's profile ACL, which for a
+    single-user local app is the same protection the vault itself has.
+    """
+    override = os.environ.get("CORTEX_API_TOKEN")
+    if override and override.strip():
+        return override.strip()
+
+    path = data_dir / "api_token"
+    if path.exists():
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+
+    token = secrets.token_urlsafe(32)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(token, encoding="utf-8")
+    with contextlib.suppress(OSError, NotImplementedError):
+        path.chmod(0o600)
+    return token

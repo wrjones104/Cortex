@@ -150,7 +150,7 @@ def search(
         project=project,
         limit=limit,
         rrf_k=config.rrf_k,
-        max_distance=config.max_distance,
+        max_distance=config.effective_max_distance,
     )
 
     if not hits:
@@ -386,3 +386,46 @@ def doctor() -> None:
 
 if __name__ == "__main__":
     app()
+
+
+@app.command()
+def token() -> None:
+    """Print the API token, creating one if this is the first run."""
+    from .config import load_or_create_token
+
+    typer.echo(load_or_create_token(_config().data_dir))
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Interface to bind."),
+    port: int = typer.Option(8765, "--port", help="Port to listen on."),
+    reload: bool = typer.Option(False, "--reload", help="Restart on code changes."),
+) -> None:
+    """Run the HTTP API."""
+    try:
+        import uvicorn
+    except ImportError as exc:
+        _fail('The API extra is not installed. Run: pip install -e ".[api]"')
+        raise typer.Exit(1) from exc
+
+    from .api import create_app
+    from .config import load_or_create_token
+
+    config = _config()
+    api_token = load_or_create_token(config.data_dir)
+
+    typer.secho(f"Cortex API on http://{host}:{port}", fg=typer.colors.GREEN, bold=True)
+    typer.echo(f"  docs   http://{host}:{port}/docs")
+    typer.echo(f"  vault  {config.db_path}")
+    typer.echo(f"  token  {api_token}")
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        typer.secho(
+            f"\n  Binding to {host} exposes this API beyond your machine.\n"
+            "  Put it on a Tailscale address rather than a public one, and never\n"
+            "  expose Ollama itself.",
+            fg=typer.colors.YELLOW,
+        )
+
+    uvicorn.run(create_app(config, api_token), host=host, port=port, reload=reload)

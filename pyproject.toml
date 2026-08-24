@@ -21,6 +21,7 @@ api = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.9",
+    "httpx>=0.28",
 ]
 
 [project.scripts]
@@ -48,5 +49,7 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
-# Function calls in argument defaults are how Typer declares CLI options.
+# Function calls in argument defaults are how Typer and FastAPI declare
+# options and dependencies. Not a bug in either case.
 "src/cortex/cli.py" = ["B008"]
+"src/cortex/api/app.py" = ["B008"]

@@ -69,10 +69,12 @@ class FakeLibrarian:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.last_context = None
+        self.calls = 0
 
     def structure(self, raw_text, *, project=None, context=""):
         from cortex.llm import LibrarianError
 
+        self.calls += 1
         self.last_context = context
         if self.fail:
             raise LibrarianError("model unavailable")

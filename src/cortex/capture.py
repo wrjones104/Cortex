@@ -9,12 +9,13 @@ decided you liked.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 
 from .embed import Embedder
 from .llm import Librarian, LibrarianError, _fallback_title
 from .models import CaptureResult
 from .retrieve import search
-from .store import create_record
+from .store import create_record, find_by_idempotency_key
 
 
 def build_context(
@@ -64,14 +65,40 @@ def capture(
     idempotency_key: str | None = None,
     allow_duplicate: bool = False,
     chunk_options: dict | None = None,
+    progress: Callable[[str, str], None] | None = None,
 ) -> CaptureResult:
     """File a note. Returns the stored record plus anything worth telling the user.
 
     Falls back to verbatim storage if the Librarian is unavailable or fails —
     losing the structuring is annoying, losing the note is not acceptable.
+
+    progress(stage, message) is called as each step begins. A local 14B model
+    takes ten to twenty seconds to structure a note, which is far too long to
+    show a client nothing at all.
     """
     if not raw_text or not raw_text.strip():
         raise ValueError("Nothing to capture - the note is empty.")
+
+    def report(stage: str, message: str) -> None:
+        if progress is not None:
+            progress(stage, message)
+
+    def chunk_count(record_id: int) -> int:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM chunks WHERE record_id = ?", (record_id,)
+        ).fetchone()
+        return int(row["n"])
+
+    # Check the idempotency key before any model work. A phone replaying a
+    # queued batch would otherwise run the Librarian over every note again
+    # only to discard the result, and the caller would have no way to tell a
+    # fresh write from a replay.
+    if idempotency_key:
+        seen = find_by_idempotency_key(conn, idempotency_key)
+        if seen is not None:
+            return CaptureResult(
+                record=seen, chunks=chunk_count(seen.id), already_stored=True
+            )
 
     warnings: list[str] = []
     body = raw_text.strip()
@@ -81,7 +108,11 @@ def capture(
     final_subcategory = subcategory
 
     if not verbatim and librarian is not None:
-        context = build_context(conn, embedder, body, project) if use_context else ""
+        context = ""
+        if use_context:
+            report("context", "Looking for related notes")
+            context = build_context(conn, embedder, body, project)
+        report("structuring", "Reading and filing the note")
         try:
             note = librarian.structure(body, project=project, context=context)
             body = note.content
@@ -96,6 +127,8 @@ def capture(
         final_title = _fallback_title(body)
     if not final_project:
         final_project = "Inbox"
+
+    report("indexing", "Chunking and embedding")
 
     # DuplicateRecordError propagates: the caller decides whether an identical
     # note is a mistake to report or a re-send to ignore.
@@ -113,12 +146,6 @@ def capture(
         chunk_options=chunk_options,
     )
 
-    chunk_count = conn.execute(
-        "SELECT COUNT(*) AS n FROM chunks WHERE record_id = ?", (record.id,)
-    ).fetchone()["n"]
+    report("done", "Filed")
 
-    return CaptureResult(
-        record=record,
-        chunks=int(chunk_count),
-        warnings=warnings,
-    )
+    return CaptureResult(record=record, chunks=chunk_count(record.id), warnings=warnings)

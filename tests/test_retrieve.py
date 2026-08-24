@@ -173,3 +173,23 @@ def test_a_query_of_nothing_but_stopwords_still_searches():
 def test_an_unrelated_query_does_not_match_on_a_stopword(conn, embedder, sample_notes):
     """The end-to-end version: no arm should claim a hit here."""
     assert search(conn, embedder, "quarterly amortisation schedules for the property") == []
+
+
+def test_the_relevance_floor_is_chosen_per_embedding_model():
+    """Measured cut-offs differ sharply between models; one number is wrong
+    for at least one of them."""
+    from cortex.retrieve import DEFAULT_MAX_DISTANCE, max_distance_for
+
+    assert max_distance_for("embeddinggemma") == 0.65
+    assert max_distance_for("nomic-embed-text") == 0.53
+    # Tags are ignored, so :latest resolves the same as the bare name.
+    assert max_distance_for("nomic-embed-text:latest") == 0.53
+    # An unknown model falls back rather than failing.
+    assert max_distance_for("something-nobody-measured") == DEFAULT_MAX_DISTANCE
+
+
+def test_an_explicit_threshold_beats_the_per_model_default():
+    from cortex.config import Config
+
+    assert Config(embed_model="nomic-embed-text").effective_max_distance == 0.53
+    assert Config(embed_model="nomic-embed-text", max_distance=0.9).effective_max_distance == 0.9

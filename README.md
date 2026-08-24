@@ -7,8 +7,9 @@ design docs, half-formed ideas — files them with a local LLM, and makes them f
 by meaning and by keyword. It runs entirely on [Ollama](https://ollama.com) and SQLite.
 Nothing leaves your computer.
 
-> **Status: rebuild in progress.** Milestone 1 (storage core + CLI) is complete and
-> tested. The HTTP API and the web client are next — see [Build order](#build-order).
+> **Status: rebuild in progress.** Milestones 1 and 2 are complete and tested:
+> the storage core, the CLI, and the HTTP API. The web client is next — see
+> [Build order](#build-order).
 
 ---
 
@@ -59,7 +60,7 @@ ollama pull qwen2.5:14b
 ## Install
 
 ```bash
-uv venv && uv pip install -e ".[dev]"
+uv venv && uv pip install -e ".[api,dev]"
 ```
 
 Check everything is wired up:
@@ -101,6 +102,8 @@ Searches by meaning and by keyword at once. Each result says which arm matched i
 | `cortex backup` | Consistent snapshot via SQLite's online backup API |
 | `cortex reindex` | Rebuild chunks and embeddings from the records |
 | `cortex doctor` | Check the vault and the model server |
+| `cortex serve` | Run the HTTP API |
+| `cortex token` | Print the API token |
 
 ### Getting your writing out
 
@@ -122,6 +125,70 @@ CORTEX_EMBED_MODEL=nomic-embed-text cortex reindex
 
 ---
 
+## The API
+
+```bash
+cortex serve
+```
+
+Serves on `http://127.0.0.1:8765` with interactive docs at `/docs`. The first run
+generates a bearer token and stores it next to the vault; `cortex token` prints it.
+
+| Route | |
+|---|---|
+| `GET /health` | Reachability. The only route that needs no token |
+| `GET /api/status` | Records, projects, index integrity, model availability |
+| `GET /api/projects` | Projects with their counts |
+| `GET /api/records` | List, filter by project, paginate |
+| `POST /api/records` | File a note |
+| `POST /api/records/stream` | Same, as server-sent events with progress |
+| `GET /api/records/{id}` · `PATCH` · `DELETE` | One record |
+| `GET /api/search` | Hybrid search |
+| `POST /api/sync` | Drain a batch of captures queued offline |
+
+Every route except `/health` needs `Authorization: Bearer <token>`.
+
+```bash
+curl -H "Authorization: Bearer $(cortex token)" "http://127.0.0.1:8765/api/search?q=lighthouse"
+```
+
+### Streaming captures
+
+A local 14B model takes ten to twenty seconds to file a note, so
+`POST /api/records/stream` reports each stage as it begins rather than leaving a
+client with nothing to show:
+
+```
+event: progress
+data: {"stage": "structuring", "message": "Reading and filing the note"}
+
+event: record
+data: {"record": {...}, "chunks": 1, "warnings": []}
+```
+
+Exactly one terminal event arrives — `record` on success, `error` on failure. Treat a
+stream that ends without one as a failure.
+
+### Syncing an offline queue
+
+`POST /api/sync` takes a batch. One bad item never fails the batch, because a phone
+that cannot tell which notes landed will either lose them or send them all again. Give
+each capture an `idempotency_key` and a replayed batch is free: the key is checked
+before any model runs, and each item comes back as `stored`, `already_stored`,
+`duplicate` or `failed`.
+
+### Reaching it from another device
+
+Bind to a [Tailscale](https://tailscale.com) address rather than a public one:
+
+```bash
+cortex serve --host 100.x.y.z
+```
+
+Ollama itself stays on `127.0.0.1` and is never exposed — only Cortex talks to it.
+
+---
+
 ## Configuration
 
 All optional — the defaults work.
@@ -134,10 +201,24 @@ All optional — the defaults work.
 | `CORTEX_LIBRARIAN_MODEL` | `qwen2.5:14b` |
 | `CORTEX_CREATIVE_MODEL` | `gemma4:12b` |
 | `CORTEX_CHUNK_TARGET` / `_MAX` / `_OVERLAP` | `400` / `512` / `60` |
-| `CORTEX_MAX_DISTANCE` | `0.75` |
+| `CORTEX_MAX_DISTANCE` | per embedding model |
+| `CORTEX_API_TOKEN` | generated on first run |
 
-`CORTEX_MAX_DISTANCE` is the relevance floor for the vector arm. Good values are
-model-dependent — see the note in `src/cortex/retrieve.py` before changing it.
+`CORTEX_MAX_DISTANCE` is the relevance floor for the vector arm — how far a vector hit
+may be before it is dropped. Without one, a query about something you never wrote hands
+back your whole vault, because nearest-neighbour search always returns its nearest
+neighbours however far away they are.
+
+Good values are model-dependent, and not by a little. Measured on a real vault, the
+cosine distance of the best hit:
+
+| Model | Genuine match | Nonsense query |
+|---|---|---|
+| `embeddinggemma` | 0.46 – 0.61 | 0.71 – 0.72 |
+| `nomic-embed-text` | 0.47 – 0.51 | 0.57 – 0.61 |
+
+Both separate cleanly, but in different places, so the default is chosen per model
+rather than pretending one number fits. Set `CORTEX_MAX_DISTANCE` to override.
 
 ---
 
@@ -169,6 +250,10 @@ src/cortex/
   port.py         import, export, backup
   vault.py        opening a vault, with or without Ollama
   cli.py          the command line
+  api/
+    app.py        routes
+    deps.py       auth and per-request resources
+    schemas.py    the wire contract
 ```
 
 `core` knows nothing about HTTP or any UI. The API and web client will be thin layers
@@ -181,8 +266,8 @@ over it.
 | | | |
 |---|---|---|
 | **M1** | Storage core, hybrid search, CLI | ✅ done |
-| **M2** | FastAPI: REST + SSE, bearer auth, batched sync | next |
-| **M3** | Web client: capture, vault, search — retires the Streamlit prototype | |
+| **M2** | FastAPI: REST + SSE, bearer auth, batched sync | ✅ done |
+| **M3** | Web client: capture, vault, search — retires the Streamlit prototype | next |
 | **M4** | Chat with persistent threads and managed context | |
 | **M5** | Creative generation with selective banking | |
 | **M6** | Offline capture, installable PWA, share target, voice | |

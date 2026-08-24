@@ -39,16 +39,29 @@ SNIPPET_CHARS = 260
 # any of them are close, so a query about something you never wrote would
 # otherwise hand back your whole vault.
 #
-# This is a coarse guard, not a precision instrument. Measured cosine
-# distances on the same corpus differ sharply between models:
+# Good cut-offs are model-dependent, and not by a little. Measured on a real
+# vault, cosine distance of the best hit:
 #
-#   embeddinggemma    related 0.44-0.54   unrelated 0.77-0.83
-#   nomic-embed-text  related 0.47-0.51   unrelated 0.57-0.61
+#   embeddinggemma    genuine 0.46-0.61   nonsense 0.71-0.72
+#   nomic-embed-text  genuine 0.47-0.51   nonsense 0.57-0.61
 #
-# No single number separates both well, so this default suits the configured
-# default model and is exposed in Config for anyone who switches. Precision
-# comes from fusing with the keyword arm, not from this cut-off.
-DEFAULT_MAX_DISTANCE = 0.75
+# Both separate cleanly, but at different places - a threshold tuned for one
+# is useless for the other. So the default is chosen per model rather than
+# pretending a single number works, and any of it can be overridden with
+# CORTEX_MAX_DISTANCE. Precision still comes mostly from fusing with the
+# keyword arm; this only suppresses the "nothing matched" case.
+MAX_DISTANCE_BY_MODEL = {
+    "embeddinggemma": 0.65,
+    "nomic-embed-text": 0.53,
+}
+
+DEFAULT_MAX_DISTANCE = 0.65
+
+
+def max_distance_for(embed_model: str) -> float:
+    """The relevance floor for a given embedding model, ignoring any tag."""
+    base = embed_model.split(":", 1)[0]
+    return MAX_DISTANCE_BY_MODEL.get(base, DEFAULT_MAX_DISTANCE)
 
 
 @dataclass

@@ -1,10 +1,12 @@
 """Auth and per-request resources.
 
-Connections are opened per request rather than shared. SQLite objects belong
-to the thread that made them, and FastAPI runs sync endpoints on a threadpool,
-so a shared connection would fail intermittently under exactly the concurrency
-a web client produces. Opening one costs microseconds; WAL mode lets readers
-run alongside a writer.
+Connections are opened per request rather than shared. Opening one costs
+microseconds, and WAL mode lets readers run alongside a writer.
+
+Per-request is necessary but not sufficient: FastAPI runs a sync dependency
+and the sync endpoint it feeds on *different* threadpool workers, so even a
+private connection is created on one thread and used on another. connect()
+therefore opens with check_same_thread=False - see the reasoning there.
 
 The embedder is the opposite case: it is a module-level singleton so that the
 dimension probe — a real call to Ollama — happens once for the process rather

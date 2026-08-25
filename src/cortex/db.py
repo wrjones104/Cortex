@@ -25,12 +25,24 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 
     isolation_level=None puts transaction control in our hands; every write
     goes through transaction() below rather than relying on implicit commits.
+
+    check_same_thread=False because a connection legitimately moves between
+    threads. FastAPI runs a sync dependency and the sync endpoint it feeds on
+    *different* threadpool workers, so a per-request connection is opened on
+    one thread and used on another - which the default guard rejects, and only
+    sometimes, depending on which worker anyio happens to pick.
+
+    Dropping the guard is safe here, and only here, because of how connections
+    are used: exactly one belongs to one request or one background task, and
+    it is handed between threads sequentially rather than shared. Python's
+    sqlite3 reports threadsafety level 3 (serialized), so the library itself
+    is fine with this. Never hold one connection open across concurrent work.
     """
     path = Path(db_path)
     if path.parent and str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(path), isolation_level=None)
+    conn = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
 
     try:

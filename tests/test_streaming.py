@@ -138,3 +138,88 @@ def test_the_stream_survives_a_client_that_disconnects_early(live_server):
     # The server is still healthy and serving.
     health = httpx.get(f"{base}/health", timeout=10)
     assert health.status_code == 200
+
+
+# --- connections across threads --------------------------------------------
+
+
+def test_a_connection_can_move_between_threads(tmp_path):
+    """FastAPI runs a sync dependency and its endpoint on different threadpool
+    workers, so a per-request connection is opened on one thread and used on
+    another. The default sqlite3 guard rejects that - and only sometimes,
+    depending on which worker anyio picks, which is why it survived the test
+    suite and then failed in real use."""
+    from cortex.db import connect
+    from cortex.migrations import migrate
+
+    holder: dict[str, object] = {}
+
+    def make() -> None:
+        conn = connect(tmp_path / "moved.db")
+        migrate(conn)
+        holder["conn"] = conn
+
+    def use() -> None:
+        try:
+            holder["conn"].execute("SELECT COUNT(*) FROM records").fetchone()
+            holder["error"] = None
+        except Exception as exc:  # noqa: BLE001 - the thing under test
+            holder["error"] = exc
+
+    maker = threading.Thread(target=make)
+    maker.start()
+    maker.join()
+
+    user = threading.Thread(target=use)
+    user.start()
+    user.join()
+
+    assert holder["error"] is None, holder["error"]
+    holder["conn"].close()
+
+
+@pytest.fixture
+def plain_server(tmp_path, embedder, monkeypatch):
+    """A real uvicorn server, so requests go through the real threadpool."""
+    deps.configure(Config(data_dir=tmp_path, embed_model="fake-embed"), TOKEN)
+    monkeypatch.setattr(deps, "_embedder", embedder)
+
+    port = _free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(), host="127.0.0.1", port=port, log_level="error")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    deadline = time.monotonic() + 10
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert server.started, "server did not start"
+
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+def test_read_routes_survive_concurrent_requests(plain_server):
+    """The regression guard.
+
+    TestClient did not catch this: it drives the app through a portal that
+    happened to reuse one thread. Hammering a real server does catch it, and
+    would have.
+    """
+    import concurrent.futures
+
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    paths = ["/api/projects", "/api/generations", "/api/threads", "/api/records", "/api/status"]
+
+    def fetch(path: str) -> int:
+        return httpx.get(f"{plain_server}{path}", headers=headers, timeout=30).status_code
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(fetch, paths[i % len(paths)]) for i in range(60)]
+        codes = [f.result() for f in futures]
+
+    assert set(codes) == {200}, f"got {sorted(set(codes))}"

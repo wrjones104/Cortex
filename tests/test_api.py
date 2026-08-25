@@ -520,3 +520,146 @@ def test_settings_are_left_alone_when_ollama_cannot_be_reached(client, monkeypat
 def test_an_empty_patch_changes_nothing(client):
     before = client.get("/api/settings").json()
     assert client.patch("/api/settings", json={}).json() == before
+
+
+# --- conversations ---------------------------------------------------------
+
+
+@pytest.fixture
+def chat_client(tmp_path, embedder, chatter, monkeypatch):
+    """A client whose chat model is the deterministic fake."""
+    config = Config(data_dir=tmp_path, embed_model="fake-embed")
+    deps.configure(config, TOKEN)
+    monkeypatch.setattr(deps, "_embedder", embedder)
+    monkeypatch.setattr(deps, "_chatter_override", chatter)
+
+    with TestClient(create_app()) as test_client:
+        test_client.headers.update({"Authorization": f"Bearer {TOKEN}"})
+        test_client.chatter = chatter
+        yield test_client
+
+
+def test_threads_start_empty(chat_client):
+    assert chat_client.get("/api/threads").json() == []
+
+
+def test_create_and_fetch_a_thread(chat_client):
+    created = chat_client.post("/api/threads", json={"title": "Echoes talk", "project": "Echoes"})
+    assert created.status_code == 201
+    thread_id = created.json()["id"]
+
+    detail = chat_client.get(f"/api/threads/{thread_id}").json()
+    assert detail["thread"]["title"] == "Echoes talk"
+    assert detail["thread"]["project"] == "Echoes"
+    assert detail["messages"] == []
+    assert detail["facts"] == []
+
+
+def test_a_missing_thread_is_a_404(chat_client):
+    assert chat_client.get("/api/threads/999").status_code == 404
+    assert chat_client.delete("/api/threads/999").status_code == 404
+    assert chat_client.patch("/api/threads/999", json={"title": "x"}).status_code == 404
+
+
+def test_rename_a_thread(chat_client):
+    thread_id = chat_client.post("/api/threads", json={}).json()["id"]
+    renamed = chat_client.patch(f"/api/threads/{thread_id}", json={"title": "Better name"})
+    assert renamed.json()["title"] == "Better name"
+
+
+def test_changing_scope_is_visible_in_the_transcript(chat_client):
+    thread_id = chat_client.post("/api/threads", json={}).json()["id"]
+    chat_client.patch(f"/api/threads/{thread_id}", json={"project": "Echoes"})
+
+    detail = chat_client.get(f"/api/threads/{thread_id}").json()
+    markers = [m for m in detail["messages"] if m["role"] == "marker"]
+    assert len(markers) == 1
+    assert "Echoes" in markers[0]["content"]
+
+
+def test_scope_can_be_cleared_back_to_all_projects(chat_client):
+    thread_id = chat_client.post("/api/threads", json={"project": "Echoes"}).json()["id"]
+    cleared = chat_client.patch(f"/api/threads/{thread_id}", json={"clear_project": True})
+    assert cleared.json()["project"] is None
+
+
+def test_delete_a_thread(chat_client):
+    thread_id = chat_client.post("/api/threads", json={}).json()["id"]
+    assert chat_client.delete(f"/api/threads/{thread_id}").status_code == 204
+    assert chat_client.get("/api/threads").json() == []
+
+
+def test_asking_streams_status_sources_tokens_then_done(chat_client):
+    thread_id = chat_client.post("/api/threads", json={}).json()["id"]
+    chat_client.chatter.replies = ["The keeper is Wexler.", "About the keeper"]
+
+    response = chat_client.post(
+        f"/api/threads/{thread_id}/messages", json={"message": "who is the keeper?"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+
+    events = _parse_sse(response.text)
+    names = [name for name, _ in events]
+
+    assert "sources" in names
+    assert "token" in names
+    assert names[-1] == "done"
+    assert names.count("done") == 1
+
+    reply = "".join(p for n, p in events if n == "token")
+    assert reply.strip() == "The keeper is Wexler."
+
+
+def test_the_exchange_is_persisted(chat_client):
+    thread_id = chat_client.post("/api/threads", json={}).json()["id"]
+    chat_client.post(f"/api/threads/{thread_id}/messages", json={"message": "a question"})
+
+    detail = chat_client.get(f"/api/threads/{thread_id}").json()
+    roles = [m["role"] for m in detail["messages"] if m["role"] != "marker"]
+    assert roles == ["user", "assistant"]
+    assert detail["messages"][0]["content"] == "a question"
+
+
+def test_history_survives_a_new_client(chat_client, tmp_path, embedder, chatter, monkeypatch):
+    """The prototype kept the transcript in browser memory, so a refresh lost
+    the whole conversation."""
+    thread_id = chat_client.post("/api/threads", json={}).json()["id"]
+    chat_client.post(f"/api/threads/{thread_id}/messages", json={"message": "remember this"})
+
+    with TestClient(create_app()) as fresh:
+        fresh.headers.update({"Authorization": f"Bearer {TOKEN}"})
+        detail = fresh.get(f"/api/threads/{thread_id}").json()
+
+    assert any(m["content"] == "remember this" for m in detail["messages"])
+
+
+def test_asking_in_a_missing_thread_ends_with_an_error_event(chat_client):
+    events = _parse_sse(
+        chat_client.post("/api/threads/999/messages", json={"message": "hi"}).text
+    )
+    assert [n for n, _ in events] == ["error"]
+    assert events[0][1]["status"] == 404
+
+
+def test_an_empty_message_is_rejected_by_validation(chat_client):
+    thread_id = chat_client.post("/api/threads", json={}).json()["id"]
+    response = chat_client.post(f"/api/threads/{thread_id}/messages", json={"message": ""})
+    assert response.status_code == 422
+
+
+def test_whitespace_only_message_ends_with_an_error_event(chat_client):
+    thread_id = chat_client.post("/api/threads", json={}).json()["id"]
+    events = _parse_sse(
+        chat_client.post(f"/api/threads/{thread_id}/messages", json={"message": "   "}).text
+    )
+    assert [n for n, _ in events] == ["error"]
+    assert events[0][1]["status"] == 400
+
+
+def test_thread_list_reports_summary_and_fact_counts(chat_client):
+    chat_client.post("/api/threads", json={})
+    listed = chat_client.get("/api/threads").json()[0]
+    assert listed["has_summary"] is False
+    assert listed["fact_count"] == 0
+    assert listed["message_count"] == 0

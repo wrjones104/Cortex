@@ -161,3 +161,47 @@ def sample_notes(conn, embedder):
         ),
     ]
     return created
+
+
+class FakeChatter:
+    """A model that answers predictably and records what it was sent.
+
+    The important thing it captures is the exact message list, so tests can
+    assert on what actually reached the model rather than on side effects.
+    """
+
+    def __init__(self, model: str = "fake-chat", context_length: int = 4096) -> None:
+        self.model = model
+        self._context = context_length
+        self.calls: list[list[dict]] = []
+        self.replies: list[str] = []
+        self.prompt_tokens = 100
+
+    @property
+    def context_length(self) -> int:
+        return self._context
+
+    def _next_reply(self, messages: list[dict]) -> str:
+        if self.replies:
+            return self.replies.pop(0)
+        return "An answer."
+
+    def complete(self, messages, *, think: bool = False):
+        self.calls.append(messages)
+        return self._next_reply(messages), self.prompt_tokens
+
+    def stream(self, messages, *, think: bool = False):
+        self.calls.append(messages)
+        reply = self._next_reply(messages)
+        for word in reply.split(" "):
+            yield ("token", word + " ")
+        yield ("done", self.prompt_tokens)
+
+    @property
+    def last_system(self) -> str:
+        return self.calls[-1][0]["content"] if self.calls else ""
+
+
+@pytest.fixture
+def chatter():
+    return FakeChatter()

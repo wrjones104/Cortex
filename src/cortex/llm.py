@@ -163,3 +163,105 @@ def _fallback_title(raw_text: str) -> str:
     first = next((ln.strip() for ln in raw_text.splitlines() if ln.strip()), "Untitled")
     first = first.lstrip("#").strip()
     return first[:80] if len(first) <= 80 else first[:77] + "..."
+
+
+class Chatter(Protocol):
+    """A model that can hold a conversation.
+
+    Separate from Librarian: filing a note is a one-shot structured call,
+    while chat streams and needs the model's real context window.
+    """
+
+    model: str
+
+    @property
+    def context_length(self) -> int: ...
+
+    def complete(self, messages: list[dict], *, think: bool = False) -> tuple[str, int]:
+        """Return (text, prompt_tokens)."""
+        ...
+
+    def stream(self, messages: list[dict], *, think: bool = False): ...
+
+
+class OllamaChat:
+    """Chat through a local Ollama server."""
+
+    def __init__(self, host: str, model: str) -> None:
+        self.model = model
+        self.host = host
+        self._context: int | None = None
+
+    @property
+    def _client(self) -> ollama.Client:
+        return client_for(self.host)
+
+    @property
+    def context_length(self) -> int:
+        """The model's real window, asked for rather than assumed.
+
+        /api/show reports it under a family-prefixed key (qwen2.context_length,
+        llama.context_length, ...), so the family is discovered rather than
+        hardcoded. Falls back conservatively if the model will not say.
+        """
+        if self._context is None:
+            self._context = self._probe_context()
+        return self._context
+
+    def _probe_context(self) -> int:
+        from .tokens import FALLBACK_CONTEXT
+
+        try:
+            import httpx
+
+            response = httpx.post(
+                f"{self.host.rstrip('/')}/api/show",
+                json={"model": self.model},
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            info = response.json().get("model_info") or {}
+        except Exception:  # noqa: BLE001 - a missing window is not fatal
+            return FALLBACK_CONTEXT
+
+        for key, value in info.items():
+            if key.endswith("context_length") and isinstance(value, int) and value > 0:
+                return value
+        return FALLBACK_CONTEXT
+
+    def complete(self, messages: list[dict], *, think: bool = False) -> tuple[str, int]:
+        try:
+            response = self._client.chat(
+                model=self.model, messages=messages, stream=False, think=think
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced with context
+            raise LibrarianError(f"{self.model} failed: {type(exc).__name__}: {exc}") from exc
+
+        text = (response["message"]["content"] or "").strip()
+        return text, int(response.get("prompt_eval_count") or 0)
+
+    def stream(self, messages: list[dict], *, think: bool = False):
+        """Yield ('token', text) as it arrives, then ('done', prompt_tokens).
+
+        Reasoning tokens are yielded separately as ('thinking', text) so a
+        client can show them without them landing in the stored answer. The
+        prototype dropped them on the floor after paying for them.
+        """
+        try:
+            chunks = self._client.chat(
+                model=self.model, messages=messages, stream=True, think=think
+            )
+            prompt_tokens = 0
+            for chunk in chunks:
+                message = chunk.get("message") or {}
+                thinking = message.get("thinking")
+                if thinking:
+                    yield ("thinking", thinking)
+                content = message.get("content")
+                if content:
+                    yield ("token", content)
+                if chunk.get("prompt_eval_count"):
+                    prompt_tokens = int(chunk["prompt_eval_count"])
+            yield ("done", prompt_tokens)
+        except Exception as exc:  # noqa: BLE001 - surfaced with context
+            raise LibrarianError(f"{self.model} failed: {type(exc).__name__}: {exc}") from exc

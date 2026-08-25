@@ -429,3 +429,113 @@ def serve(
         )
 
     uvicorn.run(create_app(config, api_token), host=host, port=port, reload=reload)
+
+
+@app.command()
+def threads(
+    delete_id: int | None = typer.Option(None, "--delete", help="Delete a conversation."),
+) -> None:
+    """List conversations, or delete one."""
+    from .chat import ThreadNotFoundError, delete_thread, list_threads
+
+    conn = open_readonly(_config())
+
+    if delete_id is not None:
+        try:
+            delete_thread(conn, delete_id)
+        except ThreadNotFoundError as exc:
+            conn.close()
+            _fail(str(exc))
+        typer.secho(f"Deleted conversation {delete_id}.", fg=typer.colors.YELLOW)
+        conn.close()
+        return
+
+    found = list_threads(conn)
+    if not found:
+        typer.echo("No conversations yet. Start one with `cortex ask`.")
+        conn.close()
+        return
+
+    for thread in found:
+        typer.secho(f"#{thread.id:<5}", fg=typer.colors.BRIGHT_BLACK, nl=False)
+        typer.echo(thread.title)
+        bits = [thread.project or "all projects", f"{thread.message_count} messages"]
+        if thread.summary:
+            bits.append("summarised")
+        typer.secho(
+            f"      {' | '.join(bits)} | {_local_time(thread.updated_at)}",
+            fg=typer.colors.BRIGHT_BLACK,
+        )
+    conn.close()
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(..., help="What to ask."),
+    thread_id: int | None = typer.Option(
+        None, "--thread", "-t", help="Continue a conversation instead of starting one."
+    ),
+    project: str | None = typer.Option(None, "--project", "-p", help="Scope a new conversation."),
+    show_sources: bool = typer.Option(True, "--sources/--no-sources", help="List what it read."),
+) -> None:
+    """Ask the vault a question, in a conversation that is kept."""
+    from .chat import ThreadNotFoundError, answer, create_thread, get_thread
+    from .llm import OllamaChat
+    from .settings import get_settings
+
+    config = _config()
+    try:
+        vault = open_vault(config)
+    except EmbeddingError as exc:
+        _fail(f"{exc}\nIs Ollama running, and is '{config.embed_model}' pulled?")
+
+    settings = get_settings(vault.conn, config)
+    chatter = OllamaChat(config.ollama_host, settings.librarian_model)
+    utility = OllamaChat(
+        config.ollama_host, settings.utility_model or settings.librarian_model
+    )
+
+    if thread_id is None:
+        thread = create_thread(vault.conn, project=project)
+        thread_id = thread.id
+    else:
+        try:
+            get_thread(vault.conn, thread_id)
+        except ThreadNotFoundError as exc:
+            vault.close()
+            _fail(str(exc))
+
+    sources: list[str] = []
+    try:
+        for kind, payload in answer(
+            vault.conn,
+            vault.embedder,
+            chatter,
+            thread_id,
+            question,
+            utility=utility,
+            max_distance=config.effective_max_distance,
+            rrf_k=config.rrf_k,
+        ):
+            if kind == "status":
+                typer.secho(f"  {payload}...", fg=typer.colors.BRIGHT_BLACK, err=True)
+            elif kind == "sources":
+                sources = list(payload)
+            elif kind == "token":
+                typer.echo(payload, nl=False)
+        typer.echo("")
+    except (LibrarianError, EmbeddingError) as exc:
+        vault.close()
+        _fail(str(exc))
+
+    if show_sources and sources:
+        typer.secho("\nRead:", fg=typer.colors.BRIGHT_BLACK)
+        for source in sources:
+            typer.secho(f"  - {source}", fg=typer.colors.BRIGHT_BLACK)
+
+    typer.secho(f"\nConversation #{thread_id}", fg=typer.colors.BRIGHT_BLACK)
+    typer.secho(
+        f"Continue it with: cortex ask --thread {thread_id} \"...\"",
+        fg=typer.colors.BRIGHT_BLACK,
+    )
+    vault.close()

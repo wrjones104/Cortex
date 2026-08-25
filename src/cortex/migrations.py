@@ -86,9 +86,51 @@ CREATE TRIGGER records_fts_au AFTER UPDATE ON records BEGIN
 END;
 """
 
+MIGRATION_2 = """
+CREATE TABLE threads (
+    id              INTEGER PRIMARY KEY,
+    title           TEXT NOT NULL,
+    project_id      INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    model           TEXT,
+    summary         TEXT NOT NULL DEFAULT '',
+    summarised_upto INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE INDEX idx_threads_updated ON threads(updated_at DESC);
+
+-- AUTOINCREMENT because summarised_upto is a message id watermark: a recycled
+-- id would make already-summarised turns look unread, or hide new ones.
+CREATE TABLE messages (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id    INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    role         TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'marker')),
+    content      TEXT NOT NULL,
+    sources_json TEXT,
+    tokens       INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX idx_messages_thread ON messages(thread_id, id);
+
+-- The part that stops a long thread forgetting. Facts are extracted from
+-- turns as they are summarised away, and are never summarised themselves.
+CREATE TABLE thread_facts (
+    id         INTEGER PRIMARY KEY,
+    thread_id  INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    fact       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (thread_id, fact)
+);
+
+CREATE INDEX idx_facts_thread ON thread_facts(thread_id, id);
+"""
+
 # (version, description, sql)
 MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "initial schema", MIGRATION_1),
+    (2, "chat threads, messages and the facts ledger", MIGRATION_2),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]

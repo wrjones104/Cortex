@@ -19,6 +19,19 @@ from fastapi.responses import StreamingResponse
 
 from .. import __version__
 from ..capture import capture as capture_note
+from ..chat import (
+    Thread,
+    ThreadNotFoundError,
+    answer,
+    create_thread,
+    delete_thread,
+    get_thread,
+    list_facts,
+    list_messages,
+    list_threads,
+    rename_thread,
+    set_thread_scope,
+)
 from ..config import Config
 from ..embed import EmbeddingError
 from ..llm import LibrarianError
@@ -38,8 +51,10 @@ from ..store import (
 from ..vault import Vault
 from . import deps
 from .schemas import (
+    AskIn,
     CaptureIn,
     CaptureOut,
+    MessageOut,
     ModelInfo,
     ModelStatus,
     ProjectOut,
@@ -54,6 +69,10 @@ from .schemas import (
     SyncIn,
     SyncOut,
     SyncResultItem,
+    ThreadCreate,
+    ThreadDetail,
+    ThreadOut,
+    ThreadPatch,
 )
 
 
@@ -165,6 +184,7 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
         return SettingsOut(
             librarian_model=settings.librarian_model,
             creative_model=settings.creative_model,
+            utility_model=settings.utility_model,
             embed_model=settings.embed_model,
         )
 
@@ -204,6 +224,7 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
         return SettingsOut(
             librarian_model=settings.librarian_model,
             creative_model=settings.creative_model,
+            utility_model=settings.utility_model,
             embed_model=settings.embed_model,
         )
 
@@ -445,6 +466,168 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
             max_distance=vault.config.effective_max_distance,
         )
         return SearchOut(query=q, hits=[SearchHitOut.of(h) for h in hits])
+
+
+    # --- conversations ------------------------------------------------------
+
+    def _thread_out(conn: sqlite3.Connection, thread: Thread) -> ThreadOut:
+        return ThreadOut(
+            id=thread.id,
+            title=thread.title,
+            project=thread.project,
+            message_count=thread.message_count,
+            has_summary=bool(thread.summary),
+            fact_count=len(list_facts(conn, thread.id)),
+            created_at=thread.created_at,
+            updated_at=thread.updated_at,
+        )
+
+    @app.get(
+        "/api/threads",
+        response_model=list[ThreadOut],
+        tags=["chat"],
+        dependencies=[deps.Authed],
+    )
+    def get_threads(conn: sqlite3.Connection = Depends(deps.get_conn)) -> list[ThreadOut]:
+        return [_thread_out(conn, t) for t in list_threads(conn)]
+
+    @app.post(
+        "/api/threads",
+        response_model=ThreadOut,
+        status_code=status.HTTP_201_CREATED,
+        tags=["chat"],
+        dependencies=[deps.Authed],
+    )
+    def post_thread(
+        body: ThreadCreate, conn: sqlite3.Connection = Depends(deps.get_conn)
+    ) -> ThreadOut:
+        thread = create_thread(
+            conn, title=body.title or "New conversation", project=body.project
+        )
+        return _thread_out(conn, thread)
+
+    @app.get(
+        "/api/threads/{thread_id}",
+        response_model=ThreadDetail,
+        tags=["chat"],
+        dependencies=[deps.Authed],
+    )
+    def get_one_thread(
+        thread_id: int, conn: sqlite3.Connection = Depends(deps.get_conn)
+    ) -> ThreadDetail:
+        try:
+            thread = get_thread(conn, thread_id)
+        except ThreadNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        return ThreadDetail(
+            thread=_thread_out(conn, thread),
+            messages=[
+                MessageOut(
+                    id=m.id,
+                    role=m.role,
+                    content=m.content,
+                    sources=m.sources,
+                    created_at=m.created_at,
+                )
+                for m in list_messages(conn, thread_id)
+            ],
+            facts=list_facts(conn, thread_id),
+        )
+
+    @app.patch(
+        "/api/threads/{thread_id}",
+        response_model=ThreadOut,
+        tags=["chat"],
+        dependencies=[deps.Authed],
+    )
+    def patch_thread(
+        thread_id: int, body: ThreadPatch, conn: sqlite3.Connection = Depends(deps.get_conn)
+    ) -> ThreadOut:
+        try:
+            if body.title is not None:
+                rename_thread(conn, thread_id, body.title)
+            if body.clear_project:
+                set_thread_scope(conn, thread_id, None)
+            elif body.project is not None:
+                set_thread_scope(conn, thread_id, body.project)
+            return _thread_out(conn, get_thread(conn, thread_id))
+        except ThreadNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete(
+        "/api/threads/{thread_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["chat"],
+        dependencies=[deps.Authed],
+    )
+    def remove_thread(thread_id: int, conn: sqlite3.Connection = Depends(deps.get_conn)) -> None:
+        try:
+            delete_thread(conn, thread_id)
+        except ThreadNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/threads/{thread_id}/messages", tags=["chat"], dependencies=[deps.Authed])
+    def post_message(thread_id: int, body: AskIn) -> StreamingResponse:
+        """Ask a question in a thread, as server-sent events.
+
+        Emits `status` while it condenses, retrieves and compacts, then
+        `sources`, then `token` per piece of the answer, then exactly one
+        terminal `done` or `error`.
+
+        Like the streaming capture, the work runs on a thread of its own
+        feeding a queue - a local model takes long enough that collecting the
+        events and flushing them at the end would defeat the point.
+        """
+        config = deps.get_config()
+
+        def events() -> Iterator[str]:
+            def sse(event: str, payload: object) -> str:
+                return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+            outbox: queue.Queue[tuple[str, object] | None] = queue.Queue()
+
+            def work() -> None:
+                vault = None
+                try:
+                    vault = deps.build_vault(config)
+                    chatter = deps.build_chatter(vault)
+                    for kind, payload in answer(
+                        vault.conn,
+                        vault.embedder,
+                        chatter,
+                        thread_id,
+                        body.message,
+                        utility=deps.build_utility(vault),
+                        max_distance=config.effective_max_distance,
+                        rrf_k=config.rrf_k,
+                    ):
+                        outbox.put((kind, payload))
+                except ThreadNotFoundError as exc:
+                    outbox.put(("error", {"status": 404, "detail": str(exc)}))
+                except ValueError as exc:
+                    outbox.put(("error", {"status": 400, "detail": str(exc)}))
+                except (EmbeddingError, LibrarianError) as exc:
+                    outbox.put(("error", {"status": 503, "detail": str(exc)}))
+                except Exception as exc:  # noqa: BLE001 - must reach the client
+                    outbox.put(
+                        ("error", {"status": 500, "detail": f"{type(exc).__name__}: {exc}"})
+                    )
+                finally:
+                    if vault is not None:
+                        vault.close()
+                    outbox.put(None)
+
+            threading.Thread(target=work, daemon=True).start()
+
+            while (item := outbox.get()) is not None:
+                yield sse(*item)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # --- sync --------------------------------------------------------------
 

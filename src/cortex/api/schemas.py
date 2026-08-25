@@ -164,6 +164,7 @@ class ModelInfo(BaseModel):
 class SettingsOut(BaseModel):
     librarian_model: str
     creative_model: str
+    utility_model: str = ""
     embed_model: str
     embed_model_locked: bool = Field(
         default=True,
@@ -175,3 +176,50 @@ class SettingsOut(BaseModel):
 class SettingsPatch(BaseModel):
     librarian_model: str | None = None
     creative_model: str | None = None
+    utility_model: str | None = None
+
+
+class ThreadOut(BaseModel):
+    id: int
+    title: str
+    project: str | None
+    message_count: int
+    has_summary: bool
+    fact_count: int
+    created_at: str
+    updated_at: str
+
+
+class MessageOut(BaseModel):
+    id: int
+    role: str
+    content: str
+    sources: list[str] = []
+    created_at: str
+
+
+class ThreadDetail(BaseModel):
+    thread: ThreadOut
+    messages: list[MessageOut]
+    facts: list[str]
+
+
+class ThreadCreate(BaseModel):
+    title: str | None = None
+    project: str | None = None
+
+
+class ThreadPatch(BaseModel):
+    title: str | None = None
+    project: str | None = Field(
+        default=None,
+        description="Search scope. Changing it writes a visible marker into "
+        "the transcript rather than changing silently.",
+    )
+    clear_project: bool = Field(
+        default=False, description="Set the scope back to all projects."
+    )
+
+
+class AskIn(BaseModel):
+    message: str = Field(min_length=1)

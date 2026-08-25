@@ -7,9 +7,9 @@ design docs, half-formed ideas — files them with a local LLM, and makes them f
 by meaning and by keyword. It runs entirely on [Ollama](https://ollama.com) and SQLite.
 Nothing leaves your computer.
 
-> **Status: rebuild in progress.** Milestones 1–3 are complete: the storage core,
-> the CLI, the HTTP API, and an installable web client that runs on the desktop and
-> the phone. Chat and creative generation are next — see [Build order](#build-order).
+> **Status: rebuild in progress.** Milestones 1–4 are complete: the storage core,
+> the CLI, the HTTP API, an installable web client, and conversations with managed
+> context. Creative generation is next — see [Build order](#build-order).
 
 ---
 
@@ -101,6 +101,8 @@ Searches by meaning and by keyword at once. Each result says which arm matched i
 | `cortex import DIR` | Ingest a folder of Markdown, recursively |
 | `cortex backup` | Consistent snapshot via SQLite's online backup API |
 | `cortex reindex` | Rebuild chunks and embeddings from the records |
+| `cortex ask` | Ask a question, in a conversation that is kept |
+| `cortex threads` | List conversations, `--delete N` to remove one |
 | `cortex doctor` | Check the vault and the model server |
 | `cortex serve` | Run the HTTP API |
 | `cortex token` | Print the API token |
@@ -144,6 +146,9 @@ generates a bearer token and stores it next to the vault; `cortex token` prints 
 | `POST /api/records/stream` | Same, as server-sent events with progress |
 | `GET /api/records/{id}` · `PATCH` · `DELETE` | One record |
 | `GET /api/search` | Hybrid search |
+| `GET/POST /api/threads` | List and start conversations |
+| `GET/PATCH/DELETE /api/threads/{id}` | One conversation |
+| `POST /api/threads/{id}/messages` | Ask, streamed as server-sent events |
 | `POST /api/sync` | Drain a batch of captures queued offline |
 
 Every route except `/health` needs `Authorization: Bearer <token>`.
@@ -189,6 +194,42 @@ Ollama itself stays on `127.0.0.1` and is never exposed — only Cortex talks to
 
 ---
 
+## Conversations
+
+```bash
+cortex ask "who tends the lighthouse?" --project Echoes
+cortex ask --thread 1 "and his daughter?"
+```
+
+Threads are stored in the vault, so they survive a restart and are the same
+conversations the web app shows. Four things make a long one work on a local model:
+
+**Query condensation.** A follow-up like "how does she find her way?" contains no
+noun at all. Before retrieving, the question is rewritten into a standalone one using
+the last few turns, so the search sees "how does Mireille navigate" rather than the
+word "she".
+
+**A budgeted window.** The model's real context length is read from `/api/show` —
+not assumed — and about 30% is held back for the answer. What is left is filled
+newest-first with the conversation, with a cap on how much retrieved material can
+crowd it out.
+
+**A rolling summary.** When the thread no longer fits, the oldest turns are folded
+into running prose instead of being dropped.
+
+**A facts ledger.** Names, decisions and corrections are extracted from turns at the
+moment they are summarised away, and are never summarised themselves. This is what
+stops turn 30 forgetting the name you gave it on turn 4.
+
+Token estimates calibrate themselves: every Ollama response reports
+`prompt_eval_count`, the true size of the prompt just sent, so the characters-per-token
+ratio is measured per model rather than guessed.
+
+Changing a thread's search scope writes a visible marker into the transcript, so
+scrolling back later shows which answers were scoped to what.
+
+---
+
 ## The web app
 
 One client for every device: a browser tab on the desktop, an installed app on the
@@ -206,6 +247,9 @@ remembers them. Three screens:
   works. Drafts survive a browser restart, and Ctrl/Cmd+Enter saves.
 - **Vault** — hybrid search across everything, filter by project, read, edit, delete.
   Each result says whether it matched by meaning, by keyword, or both.
+- **Chat** — conversations down the side, transcript in the middle. Progress shows
+  while the model works, each answer lists the notes it read, and scope changes appear
+  inline.
 - **Settings** — model routing, vault health, index integrity.
 
 Model routing is stored in the vault rather than the environment, so changing your
@@ -241,6 +285,7 @@ All optional — the defaults work.
 | `CORTEX_EMBED_MODEL` | `embeddinggemma` |
 | `CORTEX_LIBRARIAN_MODEL` | `qwen2.5:14b` |
 | `CORTEX_CREATIVE_MODEL` | `gemma4:12b` |
+| `CORTEX_UTILITY_MODEL` | falls back to the Librarian |
 | `CORTEX_CHUNK_TARGET` / `_MAX` / `_OVERLAP` | `400` / `512` / `60` |
 | `CORTEX_MAX_DISTANCE` | per embedding model |
 | `CORTEX_API_TOKEN` | generated on first run |
@@ -294,6 +339,8 @@ src/cortex/
   port.py         import, export, backup
   vault.py        opening a vault, with or without Ollama
   cli.py          the command line
+  chat.py         threads, condensation, budgeting, compaction, the ledger
+  tokens.py       token estimation that calibrates against real prompts
   settings.py     runtime model routing, stored in the vault
   api/
     app.py        routes
@@ -319,8 +366,8 @@ over it.
 | **M1** | Storage core, hybrid search, CLI | ✅ done |
 | **M2** | FastAPI: REST + SSE, bearer auth, batched sync | ✅ done |
 | **M3** | Web client: capture, vault, search, settings | ✅ done |
-| **M4** | Chat with persistent threads and managed context | next |
-| **M5** | Creative generation with selective banking | |
+| **M4** | Chat with persistent threads and managed context | ✅ done |
+| **M5** | Creative generation with selective banking | next |
 | **M6** | Offline capture, installable PWA, share target, voice | |
 | **M7** | Packaging, Tailscale binding, first-run wizard | |
 
@@ -330,9 +377,9 @@ over it.
 (`streamlit run app.py`, dependencies in `requirements.txt`) and reads its own separate
 `memory_bank/` database.
 
-The plan had it removed at M3, but the rebuild does not cover chat (M4) or creative
-generation (M5) yet, so it is kept until those land rather than dropping working
-features. Nothing depends on it.
+The plan had it removed at M3. Chat has landed since, so only creative generation
+(M5) is still missing from the rebuild; the prototype is kept until that lands rather
+than dropping a working feature. Nothing depends on it.
 
 ## Privacy
 

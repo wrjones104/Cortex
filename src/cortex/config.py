@@ -41,6 +41,9 @@ class Config:
     embed_model: str = "embeddinggemma"
     librarian_model: str = "qwen2.5:14b"
     creative_model: str = "gemma4:12b"
+    # Small and fast: condensation and summaries run often and are not
+    # the answer. Empty means "use the librarian".
+    utility_model: str = ""
 
     # Chunking. Kept well under the 2048-token ceiling shared by every
     # embedding model we support, so a chunk can never be rejected or
@@ -100,6 +103,7 @@ class Config:
             embed_model=os.environ.get("CORTEX_EMBED_MODEL", cls.embed_model),
             librarian_model=os.environ.get("CORTEX_LIBRARIAN_MODEL", cls.librarian_model),
             creative_model=os.environ.get("CORTEX_CREATIVE_MODEL", cls.creative_model),
+            utility_model=os.environ.get("CORTEX_UTILITY_MODEL", cls.utility_model),
             chunk_target_tokens=_int("CORTEX_CHUNK_TARGET", cls.chunk_target_tokens),
             chunk_max_tokens=_int("CORTEX_CHUNK_MAX", cls.chunk_max_tokens),
             chunk_overlap_tokens=_int("CORTEX_CHUNK_OVERLAP", cls.chunk_overlap_tokens),

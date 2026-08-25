@@ -5,6 +5,7 @@ import { ApiContext } from "./lib/useApi";
 import { Setup } from "./screens/Setup";
 import { Capture } from "./screens/Capture";
 import { Vault } from "./screens/Vault";
+import { Chat } from "./screens/Chat";
 import { RecordDetail } from "./screens/RecordDetail";
 import { Settings } from "./screens/Settings";
 
@@ -39,6 +40,10 @@ export default function App() {
               <SearchIcon />
               <span>Vault</span>
             </NavLink>
+            <NavLink to="/chat">
+              <ChatIcon />
+              <span>Chat</span>
+            </NavLink>
             <NavLink to="/settings">
               <GearIcon />
               <span>Settings</span>
@@ -51,6 +56,8 @@ export default function App() {
               <Route path="/capture" element={<Capture />} />
               <Route path="/vault" element={<Vault />} />
               <Route path="/vault/:id" element={<RecordDetail />} />
+              <Route path="/chat" element={<Chat />} />
+              <Route path="/chat/:id" element={<Chat />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/capture" replace />} />
             </Routes>
@@ -85,6 +92,14 @@ function SearchIcon() {
     <svg {...iconProps}>
       <circle cx="11" cy="11" r="7" />
       <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg {...iconProps}>
+      <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.8-.9L3 20.5l1.6-4.9A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z" />
     </svg>
   );
 }

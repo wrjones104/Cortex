@@ -18,7 +18,7 @@ from .db import get_meta, set_meta, transaction
 
 # Only these may be overridden at runtime, so a bad key cannot quietly become
 # a permanent row in meta.
-OVERRIDABLE = ("librarian_model", "creative_model")
+OVERRIDABLE = ("librarian_model", "creative_model", "utility_model")
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,10 @@ class Settings:
     creative_model: str
     embed_model: str
     """Fixed by the vector index. Change it with `cortex reindex`."""
+    utility_model: str = ""
+    """Small fast model for query condensation and summaries. Falls back to
+    the Librarian when empty - these are frequent little calls where latency
+    matters more than depth."""
 
 
 def get_settings(conn: sqlite3.Connection, config: Config) -> Settings:
@@ -34,6 +38,7 @@ def get_settings(conn: sqlite3.Connection, config: Config) -> Settings:
         librarian_model=get_meta(conn, "librarian_model") or config.librarian_model,
         creative_model=get_meta(conn, "creative_model") or config.creative_model,
         embed_model=get_meta(conn, "embed_model") or config.embed_model,
+        utility_model=get_meta(conn, "utility_model") or config.utility_model,
     )
 
 

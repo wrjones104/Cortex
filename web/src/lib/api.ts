@@ -88,6 +88,45 @@ export interface CaptureResult {
   warnings: string[];
 }
 
+export interface Thread {
+  id: number;
+  title: string;
+  project: string | null;
+  message_count: number;
+  has_summary: boolean;
+  fact_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  role: "user" | "assistant" | "marker";
+  content: string;
+  sources: string[];
+  created_at: string;
+}
+
+export interface ThreadDetail {
+  thread: Thread;
+  messages: ChatMessage[];
+  facts: string[];
+}
+
+export interface AnswerDone {
+  sources: string[];
+  standalone_query: string;
+  compacted: boolean;
+  prompt_tokens: number;
+  estimated_tokens: number;
+}
+
+export interface AnswerHandlers {
+  onStatus?: (message: string) => void;
+  onSources?: (sources: string[]) => void;
+  onToken?: (text: string) => void;
+}
+
 export interface Connection {
   baseUrl: string;
   token: string;
@@ -229,6 +268,103 @@ export class CortexApi {
 
   deleteRecord = (id: number) =>
     this.request<void>(`/api/records/${id}`, { method: "DELETE" });
+
+  threads = () => this.request<Thread[]>("/api/threads");
+
+  thread = (id: number) => this.request<ThreadDetail>(`/api/threads/${id}`);
+
+  createThread = (body: { title?: string; project?: string | null }) =>
+    this.request<Thread>("/api/threads", { method: "POST", body: JSON.stringify(body) });
+
+  updateThread = (
+    id: number,
+    patch: { title?: string; project?: string | null; clear_project?: boolean },
+  ) => this.request<Thread>(`/api/threads/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+
+  deleteThread = (id: number) =>
+    this.request<void>(`/api/threads/${id}`, { method: "DELETE" });
+
+  /** Ask a question in a thread, streaming the answer as it is produced. */
+  async ask(
+    threadId: number,
+    message: string,
+    handlers: AnswerHandlers = {},
+    signal?: AbortSignal,
+  ): Promise<AnswerDone> {
+    return this.readEvents(
+      `/api/threads/${threadId}/messages`,
+      { message },
+      {
+        status: (p) => handlers.onStatus?.(p.message ?? String(p)),
+        sources: (p) => handlers.onSources?.(p as string[]),
+        token: (p) => handlers.onToken?.(String(p)),
+      },
+      signal,
+    );
+  }
+
+  /**
+   * Read a server-sent event stream from a POST.
+   *
+   * EventSource cannot POST, so the body is parsed off fetch directly. The
+   * stream must end with exactly one terminal event; one that ends without
+   * one is a failure, not a silent success.
+   */
+  private async readEvents<T>(
+    path: string,
+    body: unknown,
+    handlers: Record<string, (payload: any) => void>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(this.url(path), {
+        method: "POST",
+        headers: this.headers,
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (cause) {
+      if ((cause as Error)?.name === "AbortError") throw cause;
+      throw new ApiError(0, `Cannot reach Cortex at ${this.connection.baseUrl}. Is it running?`);
+    }
+
+    if (!response.ok) throw new ApiError(response.status, await describeFailure(response));
+    if (!response.body) throw new ApiError(0, "The server sent an empty response.");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let done: T | null = null;
+
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+
+      let split: number;
+      while ((split = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+
+        let event = "message";
+        let data = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event: ")) event = line.slice(7).trim();
+          else if (line.startsWith("data: ")) data += line.slice(6);
+        }
+        if (!data) continue;
+        const payload = JSON.parse(data);
+
+        if (event === "error") throw new ApiError(payload.status ?? 500, payload.detail);
+        if (event === "done") done = payload as T;
+        else handlers[event]?.(payload);
+      }
+    }
+
+    if (!done) throw new ApiError(0, "The answer ended without completing.");
+    return done;
+  }
 
   /**
    * Capture with progress. A local 14B model takes ten to twenty seconds, so

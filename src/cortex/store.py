@@ -53,8 +53,13 @@ def utcnow() -> str:
     The prototype stored naive UTC via CURRENT_TIMESTAMP and rendered it as if
     it were local time, so every note displayed hours in the future. Keeping
     the offset makes the conversion unambiguous at the render layer.
+
+    Microseconds, not seconds: conversations are ordered by when they were
+    last touched, and at coarse resolution two threads touched close together
+    tie. The thread list does not rely on this alone (see list_threads), but
+    there is no reason to throw the precision away.
     """
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def slugify(name: str) -> str:

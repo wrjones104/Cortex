@@ -22,7 +22,7 @@ from fastapi import Depends, Header, HTTPException, status
 from ..config import Config, load_or_create_token
 from ..db import StoreError, connect
 from ..embed import EmbeddingError, OllamaEmbedder
-from ..llm import OllamaLibrarian
+from ..llm import OllamaChat, OllamaLibrarian
 from ..migrations import ensure_vector_index, migrate
 from ..settings import get_settings
 from ..vault import Vault
@@ -30,17 +30,19 @@ from ..vault import Vault
 _config: Config | None = None
 _token: str | None = None
 _embedder: OllamaEmbedder | None = None
-# Tests inject a fake here; in normal use the Librarian comes from settings.
+# Tests inject fakes here; in normal use these come from settings.
 _librarian_override: object | None = None
+_chatter_override: object | None = None
 
 
 def configure(config: Config, token: str | None = None) -> str:
     """Bind the process to one vault. Returns the active API token."""
-    global _config, _token, _embedder, _librarian_override
+    global _config, _token, _embedder, _librarian_override, _chatter_override
     _config = config
     _token = token or load_or_create_token(config.data_dir)
     _embedder = OllamaEmbedder(config.ollama_host, config.embed_model)
     _librarian_override = None
+    _chatter_override = None
     return _token
 
 
@@ -133,6 +135,29 @@ def get_vault() -> Iterator[Vault]:
         yield vault
     finally:
         vault.close()
+
+
+def build_chatter(vault: Vault) -> OllamaChat:
+    """The model that answers, resolved from the thread's settings."""
+    if _chatter_override is not None:
+        return _chatter_override
+    settings = get_settings(vault.conn, vault.config)
+    return OllamaChat(vault.config.ollama_host, settings.librarian_model)
+
+
+def build_utility(vault: Vault) -> OllamaChat:
+    """The model that condenses queries and writes summaries.
+
+    Kept separate from the answering model because these are small, frequent
+    calls where speed matters more than quality - a 9B does them fine while
+    a 27B answers. Falls back to the answering model when unset.
+    """
+    if _chatter_override is not None:
+        return _chatter_override
+    settings = get_settings(vault.conn, vault.config)
+    return OllamaChat(
+        vault.config.ollama_host, settings.utility_model or settings.librarian_model
+    )
 
 
 Authed = Depends(require_token)

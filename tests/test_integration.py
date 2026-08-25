@@ -173,3 +173,100 @@ def test_real_ollama_reports_capabilities(ollama_available):
     for model in models:
         if model["can_embed"] and "completion" not in model["capabilities"]:
             assert not model["can_chat"]
+
+
+def test_real_condensation_resolves_a_pronoun(real_vault, real_embedder):
+    """The follow-up case, against a real model.
+
+    'how does she find her way?' contains no noun at all - if condensation
+    does not resolve it, retrieval searches for the word 'she' and the model
+    is handed nothing, which is when it starts inventing.
+    """
+    from cortex.chat import answer, create_thread, list_messages
+    from cortex.llm import OllamaChat
+    from cortex.store import create_record
+
+    config = Config.from_env()
+    chatter = OllamaChat(config.ollama_host, config.librarian_model)
+
+    create_record(
+        real_vault, real_embedder, project="Echoes", title="The Lighthouse Keeper",
+        body="Wexler tends the copper lantern on the northern cliffs. His daughter "
+             "Mireille was born the winter he stopped speaking.",
+    )
+    create_record(
+        real_vault, real_embedder, project="Echoes", title="Mireille's Inheritance",
+        body="Mireille cannot see the lantern light. She navigates by the sound of "
+             "the harbour bell instead, and knows the coast better than her father.",
+    )
+
+    thread = create_thread(real_vault, project="Echoes")
+
+    for _ in answer(real_vault, real_embedder, chatter, thread.id, "who tends the lighthouse?"):
+        pass
+
+    sources = []
+    for kind, payload in answer(
+        real_vault, real_embedder, chatter, thread.id, "how does she find her way?"
+    ):
+        if kind == "sources":
+            sources = payload
+
+    assert sources, "a pronoun-only follow-up must still retrieve something"
+    assert "Mireille's Inheritance" in sources
+
+    reply = [m for m in list_messages(real_vault, thread.id) if m.role == "assistant"][-1]
+    assert "bell" in reply.content.lower()
+
+
+def test_real_compaction_summarises_and_extracts_facts(real_vault, real_embedder, monkeypatch):
+    """Compaction against real models, with the window shrunk to force it."""
+    from cortex.chat import add_message, compact, create_thread, get_thread, list_facts
+    from cortex.llm import OllamaChat
+
+    config = Config.from_env()
+    chatter = OllamaChat(config.ollama_host, config.utility_model or config.librarian_model)
+
+    thread = create_thread(real_vault)
+    add_message(real_vault, thread.id, "user", "The keeper is called Wexler and he is mute.")
+    add_message(real_vault, thread.id, "assistant", "Understood - Wexler, mute.")
+    add_message(real_vault, thread.id, "user", "His daughter is Mireille and she is blind.")
+    add_message(real_vault, thread.id, "assistant", "Noted: Mireille, blind.")
+    for i in range(6):
+        add_message(real_vault, thread.id, "user", f"unrelated point {i}")
+        add_message(real_vault, thread.id, "assistant", f"acknowledged {i}")
+
+    assert compact(real_vault, chatter, thread.id) is True
+
+    updated = get_thread(real_vault, thread.id)
+    assert updated.summary
+    assert updated.summarised_upto > 0
+
+    # The names must survive into the ledger, since the turns holding them are
+    # now folded into prose.
+    facts = " ".join(list_facts(real_vault, thread.id)).lower()
+    assert "wexler" in facts or "wexler" in updated.summary.lower()
+
+
+def test_real_token_calibration_converges_on_the_model(real_vault, real_embedder):
+    """prompt_eval_count is ground truth; the estimator should move towards it."""
+    from cortex.chat import answer, create_thread
+    from cortex.llm import OllamaChat
+    from cortex.tokens import DEFAULT_CHARS_PER_TOKEN, chars_per_token
+
+    config = Config.from_env()
+    chatter = OllamaChat(config.ollama_host, config.librarian_model)
+    thread = create_thread(real_vault)
+
+    done = None
+    for kind, payload in answer(
+        real_vault, real_embedder, chatter, thread.id, "say hello briefly"
+    ):
+        if kind == "done":
+            done = payload
+
+    assert done["prompt_tokens"] > 0, "the model should report its prompt size"
+    ratio = chars_per_token(real_vault, chatter.model)
+    assert 1.5 <= ratio <= 8.0
+    # It should have moved off the default, in some direction.
+    assert ratio != DEFAULT_CHARS_PER_TOKEN

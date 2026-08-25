@@ -159,11 +159,23 @@ CREATE TABLE generation_ideas (
 CREATE INDEX idx_ideas_generation ON generation_ideas(generation_id, ordinal);
 """
 
+MIGRATION_4 = """
+-- What a project is about, in the author's own words. Used as grounding for
+-- everything filed or generated under it, so it is foundational rather than
+-- decorative.
+ALTER TABLE projects ADD COLUMN description TEXT NOT NULL DEFAULT '';
+
+-- prompt_override was added in migration 1 and never read. Dead columns are
+-- how a schema starts lying about itself.
+ALTER TABLE projects DROP COLUMN prompt_override;
+"""
+
 # (version, description, sql)
 MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "initial schema", MIGRATION_1),
     (2, "chat threads, messages and the facts ledger", MIGRATION_2),
     (3, "creative generations and their ideas", MIGRATION_3),
+    (4, "project descriptions", MIGRATION_4),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]

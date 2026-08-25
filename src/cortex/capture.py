@@ -15,7 +15,7 @@ from .embed import Embedder
 from .llm import Librarian, LibrarianError, _fallback_title
 from .models import CaptureResult
 from .retrieve import search
-from .store import create_record, find_by_idempotency_key
+from .store import create_record, find_by_idempotency_key, project_brief
 
 
 def build_context(
@@ -39,6 +39,14 @@ def build_context(
 
     parts: list[str] = []
     used = 0
+
+    # The project's own description first: it says what the project is, which
+    # frames every note in it more reliably than five sampled records do.
+    brief = project_brief(conn, project)
+    if brief:
+        parts.append(brief)
+        used += len(brief)
+
     for hit in hits:
         entry = f"[{hit.record.project_name} - {hit.record.title}]\n{hit.snippet}"
         if used + len(entry) > budget_chars:

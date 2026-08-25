@@ -12,16 +12,18 @@ class Project:
     name: str
     slug: str
     created_at: str
-    prompt_override: str | None = None
+    description: str = ""
+    """What this project is about. Grounds anything filed or generated in it."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Project:
+        keys = row.keys()
         return cls(
             id=row["id"],
             name=row["name"],
             slug=row["slug"],
             created_at=row["created_at"],
-            prompt_override=row["prompt_override"],
+            description=row["description"] if "description" in keys else "",
         )
 
 

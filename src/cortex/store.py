@@ -47,6 +47,18 @@ class RecordNotFoundError(LookupError):
     pass
 
 
+class ProjectNotFoundError(LookupError):
+    pass
+
+
+class ProjectNameTakenError(RuntimeError):
+    pass
+
+
+class ProjectNotEmptyError(RuntimeError):
+    pass
+
+
 class StaleEditError(RuntimeError):
     """Raised when a record changed since the editor last saw it.
 
@@ -125,6 +137,91 @@ def list_projects(conn: sqlite3.Connection) -> list[Project]:
 def find_project(conn: sqlite3.Connection, name: str) -> Project | None:
     row = conn.execute("SELECT * FROM projects WHERE slug = ?", (slugify(name),)).fetchone()
     return Project.from_row(row) if row else None
+
+
+def update_project(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    new_name: str | None = None,
+    description: str | None = None,
+) -> Project:
+    """Rename a project, or set what it is about.
+
+    Records point at the project by id, so renaming moves every note with it
+    and nothing has to be rewritten.
+    """
+    project = find_project(conn, name)
+    if project is None:
+        raise ProjectNotFoundError(f"No project called '{name}'")
+
+    final_name = project.name
+    final_slug = project.slug
+
+    if new_name is not None and new_name.strip():
+        final_name = new_name.strip()
+        final_slug = slugify(final_name)
+        clash = conn.execute(
+            "SELECT name FROM projects WHERE slug = ? AND id != ?", (final_slug, project.id)
+        ).fetchone()
+        if clash:
+            raise ProjectNameTakenError(
+                f"'{final_name}' would collide with the existing project '{clash['name']}'."
+            )
+
+    with transaction(conn):
+        conn.execute(
+            "UPDATE projects SET name = ?, slug = ?, description = ? WHERE id = ?",
+            (
+                final_name,
+                final_slug,
+                project.description if description is None else description.strip(),
+                project.id,
+            ),
+        )
+
+    row = conn.execute("SELECT * FROM projects WHERE id = ?", (project.id,)).fetchone()
+    return Project.from_row(row)
+
+
+def delete_project(conn: sqlite3.Connection, name: str, *, force: bool = False) -> int:
+    """Remove an empty project. Returns how many records were deleted.
+
+    Refuses a project that still holds notes unless forced, because the
+    foreign key cascades - deleting a project would silently take every note
+    in it, which is not what "remove this label" should mean.
+    """
+    project = find_project(conn, name)
+    if project is None:
+        raise ProjectNotFoundError(f"No project called '{name}'")
+
+    held = count_records(conn, project=project.slug)
+    if held and not force:
+        raise ProjectNotEmptyError(
+            f"'{project.name}' still holds {held} note{'s' if held != 1 else ''}. "
+            "Move or delete them first, or force it to delete them with it."
+        )
+
+    with transaction(conn):
+        for row in conn.execute("SELECT id FROM records WHERE project_id = ?", (project.id,)):
+            _drop_chunks(conn, row["id"])
+        conn.execute("DELETE FROM projects WHERE id = ?", (project.id,))
+
+    return held
+
+
+def project_brief(conn: sqlite3.Connection, name: str | None) -> str:
+    """The project's description, ready to drop into a prompt.
+
+    This is what makes a description foundational rather than decorative: it
+    grounds everything filed, generated or asked under that project.
+    """
+    if not name:
+        return ""
+    project = find_project(conn, name)
+    if project is None or not project.description.strip():
+        return ""
+    return f"About the project '{project.name}':\n{project.description.strip()}"
 
 
 # --- records --------------------------------------------------------------

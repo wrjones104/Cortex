@@ -29,7 +29,12 @@ from .db import transaction
 from .embed import Embedder
 from .llm import Librarian, LibrarianError, _extract_json, _fallback_title
 from .models import Record
-from .store import DuplicateRecordError, create_record, get_or_create_project, utcnow
+from .store import (
+    DuplicateRecordError,
+    create_record,
+    get_or_create_project,
+    utcnow,
+)
 
 MAX_OPTIONS = 10
 

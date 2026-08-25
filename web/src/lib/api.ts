@@ -36,6 +36,7 @@ export interface Project {
   id: number;
   name: string;
   slug: string;
+  description: string;
   record_count: number;
 }
 
@@ -289,6 +290,18 @@ export class CortexApi {
 
   status = () => this.request<Status>("/api/status");
   projects = () => this.request<Project[]>("/api/projects");
+
+  updateProject = (slug: string, patch: { name?: string; description?: string }) =>
+    this.request<Project>(`/api/projects/${slug}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+
+  deleteProject = (slug: string, force = false) =>
+    this.request<void>(`/api/projects/${slug}`, {
+      method: "DELETE",
+      params: { force: force ? "true" : undefined },
+    });
   models = () => this.request<ModelInfo[]>("/api/models");
   settings = () => this.request<Settings>("/api/settings");
 

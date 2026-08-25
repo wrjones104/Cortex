@@ -8,6 +8,7 @@ import {
 } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { Notice, Spinner } from "../components/ui";
+import { Projects } from "../components/Projects";
 
 export function Settings() {
   const { api, baseUrl, disconnect } = useApi();
@@ -144,6 +145,8 @@ export function Settings() {
             </>
           )}
         </section>
+
+        <Projects />
 
         <section className="stack">
           <h2>Vault</h2>

@@ -412,3 +412,127 @@ def test_omitting_the_precondition_overwrites_deliberately(conn, embedder):
     update_record(conn, embedder, record.id, body="First.")
     forced = update_record(conn, embedder, record.id, body="Second.")
     assert forced.body == "Second."
+
+
+# --- managing projects -----------------------------------------------------
+
+
+def test_renaming_a_project_moves_its_notes_with_it(conn, embedder):
+    """Records point at the project by id, so nothing has to be rewritten."""
+    from cortex.store import find_project, update_project
+
+    record = create_record(conn, embedder, project="Echos", title="T", body="B")
+
+    renamed = update_project(conn, "Echos", new_name="Echoes")
+
+    assert renamed.name == "Echoes"
+    assert renamed.slug == "echoes"
+    assert get_record(conn, record.id).project_name == "Echoes"
+    assert count_records(conn, project="Echoes") == 1
+    assert find_project(conn, "Echos") is None
+
+
+def test_a_rename_onto_an_existing_project_is_refused(conn, embedder):
+    from cortex.store import ProjectNameTakenError, update_project
+
+    create_record(conn, embedder, project="Echoes", title="A", body="a")
+    create_record(conn, embedder, project="Work Notes", title="B", body="b")
+
+    with pytest.raises(ProjectNameTakenError, match="collide"):
+        update_project(conn, "Work Notes", new_name="echoes")
+
+    # Nothing moved.
+    assert count_records(conn, project="Echoes") == 1
+    assert count_records(conn, project="Work Notes") == 1
+
+
+def test_a_description_can_be_set_and_cleared(conn):
+    from cortex.store import get_or_create_project, update_project
+
+    get_or_create_project(conn, "Echoes")
+
+    described = update_project(conn, "Echoes", description="  A coastal town that forgets.  ")
+    assert described.description == "A coastal town that forgets."
+
+    assert update_project(conn, "Echoes", description="").description == ""
+
+
+def test_renaming_does_not_disturb_the_description(conn):
+    from cortex.store import get_or_create_project, update_project
+
+    get_or_create_project(conn, "Echoes")
+    update_project(conn, "Echoes", description="A coastal town.")
+
+    renamed = update_project(conn, "Echoes", new_name="Echoes Reborn")
+    assert renamed.description == "A coastal town."
+
+
+def test_updating_a_project_that_does_not_exist(conn):
+    from cortex.store import ProjectNotFoundError, update_project
+
+    with pytest.raises(ProjectNotFoundError):
+        update_project(conn, "Nowhere", description="x")
+
+
+def test_deleting_a_project_that_still_holds_notes_is_refused(conn, embedder):
+    """The foreign key cascades, so an unguarded delete would silently take
+    every note in the project."""
+    from cortex.store import ProjectNotEmptyError, delete_project
+
+    create_record(conn, embedder, project="Echoes", title="T", body="B")
+
+    with pytest.raises(ProjectNotEmptyError, match="still holds 1 note"):
+        delete_project(conn, "Echoes")
+
+    assert count_records(conn) == 1
+
+
+def test_an_empty_project_can_be_deleted(conn):
+    from cortex.store import delete_project, get_or_create_project, list_projects
+
+    get_or_create_project(conn, "Spare")
+    assert delete_project(conn, "Spare") == 0
+    assert list_projects(conn) == []
+
+
+def test_forcing_a_delete_takes_the_notes_and_their_index(conn, embedder):
+    from cortex.store import delete_project, integrity_report
+
+    body = "\n\n".join(f"Paragraph {i} of some length here. " * 8 for i in range(20))
+    create_record(conn, embedder, project="Echoes", title="A", body=body)
+    create_record(conn, embedder, project="Echoes", title="B", body="short")
+    create_record(conn, embedder, project="Keep", title="C", body="kept")
+
+    assert delete_project(conn, "Echoes", force=True) == 2
+
+    assert count_records(conn) == 1
+    # Vectors are not cascaded by the foreign key, so they must go by hand.
+    assert integrity_report(conn) == {
+        "orphan_chunks": 0,
+        "chunks_without_vectors": 0,
+        "vectors_without_chunks": 0,
+        "records_without_chunks": 0,
+    }
+
+
+# --- the description as grounding -----------------------------------------
+
+
+def test_the_brief_is_empty_without_a_description(conn):
+    from cortex.store import get_or_create_project, project_brief
+
+    get_or_create_project(conn, "Echoes")
+    assert project_brief(conn, "Echoes") == ""
+    assert project_brief(conn, None) == ""
+    assert project_brief(conn, "Nowhere") == ""
+
+
+def test_the_brief_carries_the_description(conn):
+    from cortex.store import get_or_create_project, project_brief, update_project
+
+    get_or_create_project(conn, "Echoes")
+    update_project(conn, "Echoes", description="A coastal town that forgets its own history.")
+
+    brief = project_brief(conn, "Echoes")
+    assert "Echoes" in brief
+    assert "forgets its own history" in brief

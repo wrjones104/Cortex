@@ -48,14 +48,19 @@ from ..retrieve import search as search_vault
 from ..settings import get_settings, installed_models, normalise_model, set_settings
 from ..store import (
     DuplicateRecordError,
+    ProjectNameTakenError,
+    ProjectNotEmptyError,
+    ProjectNotFoundError,
     RecordNotFoundError,
     StaleEditError,
     count_records,
+    delete_project,
     delete_record,
     get_record,
     integrity_report,
     list_projects,
     list_records,
+    update_project,
     update_record,
 )
 from ..vault import Vault
@@ -74,6 +79,7 @@ from .schemas import (
     ModelInfo,
     ModelStatus,
     ProjectOut,
+    ProjectPatch,
     RecordList,
     RecordOut,
     RecordPatch,
@@ -268,10 +274,57 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
                 id=p.id,
                 name=p.name,
                 slug=p.slug,
+                description=p.description,
                 record_count=count_records(conn, project=p.slug),
             )
             for p in list_projects(conn)
         ]
+
+    @app.patch(
+        "/api/projects/{slug}",
+        response_model=ProjectOut,
+        tags=["projects"],
+        dependencies=[deps.Authed],
+    )
+    def patch_project(
+        slug: str, body: ProjectPatch, conn: sqlite3.Connection = Depends(deps.get_conn)
+    ) -> ProjectOut:
+        """Rename a project, or say what it is about."""
+        try:
+            project = update_project(
+                conn, slug, new_name=body.name, description=body.description
+            )
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ProjectNameTakenError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        return ProjectOut(
+            id=project.id,
+            name=project.name,
+            slug=project.slug,
+            description=project.description,
+            record_count=count_records(conn, project=project.slug),
+        )
+
+    @app.delete(
+        "/api/projects/{slug}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["projects"],
+        dependencies=[deps.Authed],
+    )
+    def remove_project(
+        slug: str,
+        force: bool = Query(default=False, description="Delete its notes with it."),
+        conn: sqlite3.Connection = Depends(deps.get_conn),
+    ) -> None:
+        """Remove a project. Refuses a project that still holds notes."""
+        try:
+            delete_project(conn, slug, force=force)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ProjectNotEmptyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # --- records -----------------------------------------------------------
 

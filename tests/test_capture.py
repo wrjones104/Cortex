@@ -161,3 +161,25 @@ def test_a_replay_never_reaches_the_model(conn, embedder, librarian):
         project="P", idempotency_key="queue-10",
     )
     assert librarian.calls == calls_after_first
+
+
+def test_the_project_description_grounds_what_is_filed(conn, embedder, librarian):
+    """A description is foundational, not decorative: it frames every note in
+    the project more reliably than five sampled records do."""
+    from cortex.store import get_or_create_project, update_project
+
+    get_or_create_project(conn, "Echoes")
+    update_project(conn, "Echoes", description="A coastal town that forgets its own history.")
+
+    capture(conn, embedder, "Something about the harbour.", librarian=librarian, project="Echoes")
+
+    assert "forgets its own history" in librarian.last_context
+
+
+def test_the_description_leads_the_grounding(conn, embedder, librarian, sample_notes):
+    from cortex.store import update_project
+
+    update_project(conn, "Echoes", description="A coastal town that forgets.")
+    context = build_context(conn, embedder, "the lighthouse keeper", "Echoes")
+
+    assert context.startswith("About the project 'Echoes'")

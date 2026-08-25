@@ -469,15 +469,18 @@ button.quiet {
   font-size: 0.96rem;
 }
 
+/* currentColor so the ring matches its surroundings - on a coloured button
+   a fixed grey ring is as unreadable as a fixed grey label. */
 .spin {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid var(--line-strong);
-  border-top-color: var(--accent);
+  border: 2px solid currentColor;
+  border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   vertical-align: -2px;
+  opacity: 0.85;
 }
 
 @keyframes spin {
@@ -719,4 +722,10 @@ button.quiet {
 
 @media (min-width: 780px) {
   .badge { position: static; transform: none; margin-left: auto; }
+}
+
+.hint {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
 }

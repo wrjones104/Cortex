@@ -31,7 +31,7 @@ from .embed import Embedder
 from .llm import Chatter, LibrarianError
 from .models import SearchHit
 from .retrieve import search
-from .store import get_or_create_project, slugify, utcnow
+from .store import get_or_create_project, project_brief, slugify, utcnow
 from .tokens import calibrate, chars_per_token, estimate, estimate_messages, input_budget
 
 # How the input budget is divided. Retrieved notes are capped so a long thread
@@ -430,6 +430,10 @@ def build_window(
 
     facts = list_facts(conn, thread.id)
     system = PERSONA
+
+    brief = project_brief(conn, thread.project)
+    if brief:
+        system += f"\n\n{brief}"
 
     if facts:
         system += "\n\nEstablished in this conversation:\n" + "\n".join(f"- {f}" for f in facts)

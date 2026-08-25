@@ -256,7 +256,76 @@ def projects() -> None:
     for project in found:
         count = count_records(conn, project=project.slug)
         typer.echo(f"{project.name.ljust(width)}   {count:>4}")
+        if project.description:
+            typer.secho(
+                f"{' ' * width}   {project.description[:70]}", fg=typer.colors.BRIGHT_BLACK
+            )
     conn.close()
+
+
+@app.command()
+def project(
+    name: str = typer.Argument(..., help="Which project."),
+    rename: str | None = typer.Option(None, "--rename", help="Give it a new name."),
+    describe: str | None = typer.Option(
+        None, "--describe", help="Say what it is about. Grounds everything filed in it."
+    ),
+    remove: bool = typer.Option(False, "--delete", help="Remove it. Must be empty."),
+    force: bool = typer.Option(False, "--force", help="With --delete, take its notes too."),
+) -> None:
+    """Rename a project, describe it, or remove it."""
+    from .store import (
+        ProjectNameTakenError,
+        ProjectNotEmptyError,
+        ProjectNotFoundError,
+        delete_project,
+        find_project,
+        update_project,
+    )
+
+    conn = open_readonly(_config())
+
+    try:
+        if remove:
+            held = count_records(conn, project=name)
+            if held and force and not typer.confirm(
+                f"Delete '{name}' and its {held} note(s) permanently?", default=False
+            ):
+                conn.close()
+                raise typer.Abort
+            deleted = delete_project(conn, name, force=force)
+            typer.secho(
+                f"Removed '{name}'"
+                + (f" and {deleted} note(s)." if deleted else " (it was empty)."),
+                fg=typer.colors.YELLOW,
+            )
+            conn.close()
+            return
+
+        if rename is not None or describe is not None:
+            updated = update_project(conn, name, new_name=rename, description=describe)
+            typer.secho(f"{updated.name}", fg=typer.colors.GREEN, bold=True)
+            if updated.description:
+                typer.echo(f"  {updated.description}")
+            conn.close()
+            return
+
+        found = find_project(conn, name)
+        if found is None:
+            conn.close()
+            _fail(f"No project called '{name}'")
+
+        typer.secho(found.name, bold=True)
+        typer.echo(f"  {count_records(conn, project=found.slug)} note(s)")
+        typer.echo(f"  {found.description}" if found.description else "  (no description)")
+        conn.close()
+
+    except ProjectNotFoundError as exc:
+        conn.close()
+        _fail(str(exc))
+    except (ProjectNameTakenError, ProjectNotEmptyError) as exc:
+        conn.close()
+        _fail(str(exc))
 
 
 @app.command("export")

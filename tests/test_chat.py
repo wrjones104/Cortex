@@ -526,3 +526,29 @@ def test_input_budget_leaves_room_for_the_answer():
 def test_estimate_counts_something_for_any_real_text():
     assert estimate("") == 0
     assert estimate("hello world") >= 1
+
+
+def test_a_scoped_thread_carries_the_project_description(conn):
+    from cortex.store import get_or_create_project, update_project
+
+    get_or_create_project(conn, "Echoes")
+    update_project(conn, "Echoes", description="A coastal town that forgets its own history.")
+
+    thread = create_thread(conn, project="Echoes")
+    window = build_window(conn, get_thread(conn, thread.id), "a question", [],
+                          context_length=4096, ratio=4.0)
+
+    assert "forgets its own history" in window.messages[0]["content"]
+
+
+def test_an_unscoped_thread_carries_no_project_description(conn):
+    from cortex.store import get_or_create_project, update_project
+
+    get_or_create_project(conn, "Echoes")
+    update_project(conn, "Echoes", description="A coastal town.")
+
+    thread = create_thread(conn)
+    window = build_window(conn, get_thread(conn, thread.id), "q", [],
+                          context_length=4096, ratio=4.0)
+
+    assert "A coastal town" not in window.messages[0]["content"]

@@ -149,7 +149,8 @@ Searches by meaning and by keyword at once. Each result says which arm matched i
 | `cortex list` | Records, newest first |
 | `cortex show ID` | One record in full |
 | `cortex delete ID` | Delete a record and everything indexed from it |
-| `cortex projects` | Projects and their record counts |
+| `cortex projects` | Projects, their descriptions and record counts |
+| `cortex project NAME` | Rename it, describe it, or remove it |
 | `cortex export DIR` | Every record as Markdown with YAML frontmatter |
 | `cortex import DIR` | Ingest a folder of Markdown, recursively |
 | `cortex backup` | Consistent snapshot via SQLite's online backup API |

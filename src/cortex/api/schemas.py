@@ -16,7 +16,17 @@ class ProjectOut(BaseModel):
     id: int
     name: str
     slug: str
+    description: str = ""
     record_count: int
+
+
+class ProjectPatch(BaseModel):
+    name: str | None = Field(default=None, description="Rename it. Notes move with it.")
+    description: str | None = Field(
+        default=None,
+        description="What the project is about. Grounds anything filed, "
+        "generated or asked under it.",
+    )
 
 
 class RecordOut(BaseModel):

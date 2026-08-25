@@ -832,3 +832,65 @@ def test_editing_from_the_current_version_succeeds(client):
     )
     assert ok.status_code == 200
     assert ok.json()["body"] == "Fine."
+
+
+# --- managing projects -----------------------------------------------------
+
+
+def test_projects_carry_their_description(client):
+    client.post("/api/records", json={"text": "A note.", "project": "Echoes"})
+    client.patch("/api/projects/echoes", json={"description": "A coastal town."})
+
+    listed = client.get("/api/projects").json()[0]
+    assert listed["description"] == "A coastal town."
+    assert listed["record_count"] == 1
+
+
+def test_renaming_a_project_over_http(client):
+    client.post("/api/records", json={"text": "A note.", "project": "Echos"})
+
+    renamed = client.patch("/api/projects/echos", json={"name": "Echoes"})
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Echoes"
+    assert renamed.json()["slug"] == "echoes"
+
+    # The note went with it.
+    assert client.get("/api/records?project=Echoes").json()["total"] == 1
+
+
+def test_renaming_onto_an_existing_project_is_a_409(client):
+    client.post("/api/records", json={"text": "A.", "project": "Echoes"})
+    client.post("/api/records", json={"text": "B.", "project": "Work"})
+
+    conflict = client.patch("/api/projects/work", json={"name": "Echoes"})
+    assert conflict.status_code == 409
+    assert "collide" in conflict.json()["detail"]
+
+
+def test_patching_a_missing_project_is_a_404(client):
+    assert client.patch("/api/projects/nowhere", json={"name": "X"}).status_code == 404
+    assert client.delete("/api/projects/nowhere").status_code == 404
+
+
+def test_deleting_a_project_with_notes_is_a_409(client):
+    client.post("/api/records", json={"text": "A note.", "project": "Echoes"})
+
+    refused = client.delete("/api/projects/echoes")
+    assert refused.status_code == 409
+    assert "still holds" in refused.json()["detail"]
+    assert client.get("/api/records").json()["total"] == 1
+
+
+def test_deleting_an_empty_project(client):
+    client.post("/api/records", json={"text": "A note.", "project": "Echoes"})
+    client.delete("/api/records/1")
+
+    assert client.delete("/api/projects/echoes").status_code == 204
+    assert client.get("/api/projects").json() == []
+
+
+def test_forcing_a_delete_takes_the_notes(client):
+    client.post("/api/records", json={"text": "A note.", "project": "Echoes"})
+
+    assert client.delete("/api/projects/echoes?force=true").status_code == 204
+    assert client.get("/api/records").json()["total"] == 0

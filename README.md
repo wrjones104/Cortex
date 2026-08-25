@@ -243,146 +243,44 @@ before any model runs, and each item comes back as `stored`, `already_stored`,
 
 ### Reaching it from another device
 
+Put Tailscale in front of Cortex rather than binding Cortex to the tailnet:
+
 ```bash
-cortex serve --tailscale
+cortex serve                  # stays on 127.0.0.1
+tailscale serve --bg 8765     # publishes it over HTTPS on your tailnet
 ```
 
-Binds to this machine's [Tailscale](https://tailscale.com) address, which it finds for
-you. Your own devices can reach it; nothing else can. Open that address on your phone
-and add it to your home screen.
+Your machine is then reachable at `https://<machine>.<tailnet>.ts.net` from your own
+devices and nothing else. `tailscale serve status` shows what is published;
+`tailscale serve reset` takes it down.
+
+**Do it this way, not by binding to the tailnet address.** Two reasons:
+
+*HTTPS is not optional for the phone client.* Browsers only grant service workers,
+home-screen install and dictation to a *secure context* — HTTPS, or localhost. Over
+plain `http://100.x.y.z` the app still loads, but it will not install, will not cache
+its shell, and the microphone button disappears. Tailscale issues a real certificate,
+so all of that works.
+
+*No firewall hole.* Cortex keeps listening on localhost, where nothing needs to be
+allowed through. Binding to the tailnet address instead means adding an inbound rule
+for whichever `python.exe` is running it — easy to get wrong, and easy to leave behind.
+
+If you would rather bind directly anyway, `cortex serve --tailscale` finds the address
+for you, and you will need an inbound rule scoped to that interface:
+
+```powershell
+# Run as Administrator. Narrow on purpose: this port, that adapter, tailnet only.
+New-NetFirewallRule -DisplayName "Cortex on Tailscale" `
+  -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 `
+  -InterfaceAlias "Tailscale" -RemoteAddress 100.64.0.0/10 -Profile Private
+```
 
 > **Check Ollama too.** Cortex requires a token on every route. Ollama requires
 > nothing — so an Ollama listening on `0.0.0.0` means anyone who can reach the machine
 > can use your models and read what is sent through them, whatever Cortex does.
 > `cortex doctor` tests this by actually calling Ollama on a non-loopback address and
 > tells you if it answers. The fix is `OLLAMA_HOST=127.0.0.1` and a restart.
-
----
-
-## Conversations
-
-```bash
-cortex ask "who tends the lighthouse?" --project Echoes
-cortex ask --thread 1 "and his daughter?"
-```
-
-Threads are stored in the vault, so they survive a restart and are the same
-conversations the web app shows. Four things make a long one work on a local model:
-
-**Query condensation.** A follow-up like "how does she find her way?" contains no
-noun at all. Before retrieving, the question is rewritten into a standalone one using
-the last few turns, so the search sees "how does Mireille navigate" rather than the
-word "she".
-
-**A budgeted window.** The model's real context length is read from `/api/show` —
-not assumed — and about 30% is held back for the answer. What is left is filled
-newest-first with the conversation, with a cap on how much retrieved material can
-crowd it out.
-
-**A rolling summary.** When the thread no longer fits, the oldest turns are folded
-into running prose instead of being dropped.
-
-**A facts ledger.** Names, decisions and corrections are extracted from turns at the
-moment they are summarised away, and are never summarised themselves. This is what
-stops turn 30 forgetting the name you gave it on turn 4.
-
-Token estimates calibrate themselves: every Ollama response reports
-`prompt_eval_count`, the true size of the prompt just sent, so the characters-per-token
-ratio is measured per model rather than guessed.
-
-Changing a thread's search scope writes a visible marker into the transcript, so
-scrolling back later shows which answers were scoped to what.
-
----
-
-## Brainstorming
-
-```bash
-cortex brainstorm --project Echoes -n 4 "ways the harbour bell might work"
-cortex ideas 1 --bank 0,3
-```
-
-Two modes, because brainstorming happens two ways:
-
-**Alternatives** for when you know you want options. The count is part of the request
-and the model returns a structured array, which is far more reliable than cutting
-prose apart afterwards. You get a numbered list; you bank the ones you wanted.
-
-**Ramble** for when the good idea turns up mid-thought. Generate as prose, then
-`--split` it into candidates once you see something worth keeping.
-
-Either way **each idea becomes its own record**, with its own title and its own
-embedding — which is what makes it findable on its own later. Banking is **verbatim
-by default**: the prototype sent every banked idea back through the Librarian, handing
-a 27B model an unrequested rewrite of prose you had already decided you liked. Pass
-`--clean` when you do want it tidied.
-
-Generations are kept, so a second attempt never destroys a batch you had not finished
-mining, and ideas you already banked are marked so you cannot file one twice.
-
----
-
-## The web app
-
-One client for every device: a browser tab on the desktop, an installed app on the
-phone. Both talk to the same API.
-
-```bash
-cortex serve              # terminal 1
-npm run dev --prefix web  # terminal 2, opens http://localhost:5173
-```
-
-On first run it asks for the server address and your token (`cortex token`), and
-remembers them. Three screens:
-
-- **Capture** — type, pick a project, save. Progress streams in while the model
-  works. Drafts survive a browser restart, and Ctrl/Cmd+Enter saves.
-- **Vault** — hybrid search across everything, filter by project, read, edit, delete.
-  Each result says whether it matched by meaning, by keyword, or both.
-- **Create** — brainstorm alternatives or ramble, then tick the ideas worth keeping.
-  Earlier generations stay available.
-- **Chat** — conversations down the side, transcript in the middle. Progress shows
-  while the model works, each answer lists the notes it read, and scope changes appear
-  inline.
-- **Settings** — model routing, vault health, index integrity.
-
-Model routing is stored in the vault rather than the environment, so changing your
-Librarian is a click and takes effect immediately. Only chat-capable models are
-offered — Ollama reports what each model can do, so an embedding model can no longer
-be selected as a chat model.
-
-### On the phone
-
-Build once and serve the static files:
-
-```bash
-npm run build --prefix web
-```
-
-Open the app on your phone, point it at your Tailscale address, and use "Add to Home
-Screen". The app shell is cached by a service worker, so it opens instantly.
-
-**Capture works with no signal.** A note goes into a queue on the device and the screen
-returns immediately — it never waits for a round trip, and never depends on one
-succeeding. The queue drains itself when the network comes back, when you reopen the
-app, or when you tap Sync. Every queued note carries an idempotency key, so a batch the
-phone was unsure about can be re-sent without duplicating anything.
-
-The model never runs on the handset. Queued notes are filed by the Librarian on your
-desktop when they arrive, which is where the GPU is.
-
-**Share to Cortex.** The app registers as a share target, so it appears in Android's
-share sheet. Highlight anything, share it, and it lands in the capture box.
-
-**Dictation.** The microphone button transcribes on the device via the Web Speech API,
-so it costs no round trip and works offline like everything else on that screen.
-
-> **Not included: true background sync.** A service worker draining the queue while the
-> app is closed would need the connection token, which lives in localStorage and a
-> service worker cannot read — so it would mean a second copy of the auth and sync
-> logic that could drift from the first. The window it would cover is between capturing
-> offline and next opening the app, and opening the app is how you capture the next
-> thing anyway.
 
 ---
 

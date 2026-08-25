@@ -467,9 +467,22 @@ def serve(
             fg=typer.colors.RED,
         )
     elif host not in ("127.0.0.1", "localhost", "::1"):
+        # Plain HTTP on anything but localhost is not a secure context, and a
+        # browser withholds exactly the things the phone client needs. Say it
+        # here, because this is the moment someone is about to open it there.
         typer.secho(
-            f"\n  Reachable from other machines at {host}. Ollama itself stays on\n"
-            "  127.0.0.1 and is never exposed - only Cortex talks to it.",
+            "\n  Serving plain HTTP on a non-local address. Browsers treat that as\n"
+            "  insecure, so on a phone there is no service worker, no install to\n"
+            "  the home screen, and no dictation.",
+            fg=typer.colors.YELLOW,
+        )
+        typer.secho(
+            "\n  For HTTPS without opening a firewall port, leave Cortex on\n"
+            "  localhost and put Tailscale in front of it instead:\n"
+            f"\n      cortex serve --port {port}\n"
+            f"      tailscale serve --bg {port}\n"
+            "\n  Cortex needs a token on every route; check the same is true of\n"
+            "  Ollama with `cortex doctor`.",
             fg=typer.colors.BRIGHT_BLACK,
         )
 

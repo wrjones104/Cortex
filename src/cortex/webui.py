@@ -7,10 +7,16 @@ to them — is not a thing to ship.
 The built assets are looked for in three places, in order:
 
 1. CORTEX_WEB_DIR, for anyone serving a build from somewhere else entirely.
-2. `cortex/webui/` inside the installed package, which is where the release
-   build puts them.
-3. `web/dist` relative to the repository root, which is what a dev checkout
-   has after `npm run build --prefix web`.
+2. `web/dist` relative to the repository root, which is what `npm run build`
+   writes and therefore always the freshest thing in a checkout.
+3. `cortex/webui/` inside the installed package, which is where the release
+   build copies them and the only one an installed Cortex has.
+
+The order of the last two is load-bearing. The packaged copy is staged by
+hand before building a wheel, so in a checkout it goes stale the moment the
+client is rebuilt - and if it won, `cortex serve` would keep serving an old
+build with nothing to say so. An installed package has no `web/dist` beside
+it, so putting the checkout first costs it nothing.
 
 If none exist the API still runs perfectly well; only the browser client is
 missing, and `cortex doctor` says so.
@@ -36,16 +42,33 @@ def find_web_dir() -> Path | None:
         candidate = Path(override).expanduser()
         return candidate if (candidate / "index.html").exists() else None
 
-    packaged = Path(__file__).parent / "webui"
-    if (packaged / "index.html").exists():
-        return packaged
-
     # src/cortex/webui.py -> repository root -> web/dist
     checkout = Path(__file__).resolve().parents[2] / "web" / "dist"
     if (checkout / "index.html").exists():
         return checkout
 
+    packaged = Path(__file__).parent / "webui"
+    if (packaged / "index.html").exists():
+        return packaged
+
     return None
+
+
+def built_at(web_dir: Path) -> str | None:
+    """When the served client was built, in local time.
+
+    Worth surfacing: the assets are built separately from the Python side, so
+    "I changed the UI and nothing happened" is almost always a stale build
+    rather than a broken one.
+    """
+    from datetime import datetime
+
+    index = web_dir / "index.html"
+    if not index.exists():
+        return None
+    return datetime.fromtimestamp(index.stat().st_mtime).astimezone().strftime(
+        "%Y-%m-%d %H:%M"
+    )
 
 
 def mount(app: FastAPI, web_dir: Path) -> None:

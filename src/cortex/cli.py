@@ -430,6 +430,19 @@ def doctor() -> None:
         typer.secho("  integrity ok", fg=typer.colors.GREEN)
     conn.close()
 
+    from .webui import built_at, find_web_dir
+
+    typer.secho("\nWeb client", bold=True)
+    web_dir = find_web_dir()
+    if web_dir is None:
+        typer.secho("  not built", fg=typer.colors.YELLOW)
+        typer.echo("  run: npm run build --prefix web")
+    else:
+        typer.secho(f"  serving  {web_dir}", fg=typer.colors.GREEN)
+        stamp = built_at(web_dir)
+        if stamp:
+            typer.echo(f"  built    {stamp}")
+
     typer.secho("\nOllama", bold=True)
     typer.echo(f"  host     {config.ollama_host}")
     try:
@@ -518,7 +531,12 @@ def serve(
 
     typer.secho(f"Cortex on http://{host}:{port}", fg=typer.colors.GREEN, bold=True)
     if web_dir is not None:
-        typer.echo(f"  app    http://{host}:{port}")
+        from .webui import built_at
+
+        stamp = built_at(web_dir)
+        typer.echo(
+            f"  app    http://{host}:{port}" + (f"  (built {stamp})" if stamp else "")
+        )
     elif web:
         typer.secho(
             "  app    not built - run: npm run build --prefix web",

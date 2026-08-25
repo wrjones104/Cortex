@@ -78,16 +78,30 @@ One command, one port. The API and the web app are served together at
 
 `cortex doctor` re-runs the checks any time.
 
+### After pulling changes
+
+`web/dist` is a build artifact and is not in git, so rebuild the client whenever you
+pull something that touched it:
+
+```bash
+npm run build --prefix web
+```
+
+`cortex serve` prints when the client it is serving was built, and `cortex doctor`
+shows which directory it came from — so a stale build says so rather than quietly
+serving you yesterday's UI.
+
 ### As a package
 
 ```bash
 npm run build --prefix web && cp -r web/dist src/cortex/webui
-uv build
-pipx install dist/cortex-*.whl
+uv build && pipx install dist/cortex-*.whl
+rm -rf src/cortex/webui   # it would shadow future builds in this checkout
 ```
 
-The web client is copied into the package before building, so an installed Cortex
-serves the app itself.
+The client is copied into the package before building, so an installed Cortex serves
+the app itself. Remove the staged copy afterwards: `web/dist` wins in a checkout, but
+leaving a second copy around invites confusion about which one is live.
 
 ### With Docker
 

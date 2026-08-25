@@ -355,3 +355,58 @@ def test_a_private_ollama_passes_the_check(tmp_path, monkeypatch):
 
     assert next(c for c in plan.checks if c.name == "Ollama reach").ok is True
     assert plan.ready is True
+
+
+def test_a_checkout_build_beats_the_packaged_copy(tmp_path, monkeypatch):
+    """The staged copy is written by hand before building a wheel, so in a
+    checkout it goes stale the moment the client is rebuilt. If it won,
+    `cortex serve` would keep serving an old build with nothing to say so -
+    which is exactly what happened."""
+    import cortex.webui as webui
+
+    root = tmp_path / "repo"
+    checkout = root / "web" / "dist"
+    checkout.mkdir(parents=True)
+    (checkout / "index.html").write_text("fresh", encoding="utf-8")
+
+    package = root / "src" / "cortex"
+    packaged = package / "webui"
+    packaged.mkdir(parents=True)
+    (packaged / "index.html").write_text("stale", encoding="utf-8")
+
+    monkeypatch.delenv("CORTEX_WEB_DIR", raising=False)
+    monkeypatch.setattr(webui, "__file__", str(package / "webui.py"))
+
+    found = webui.find_web_dir()
+    assert found == checkout
+    assert (found / "index.html").read_text(encoding="utf-8") == "fresh"
+
+
+def test_an_installed_package_uses_its_own_copy(tmp_path, monkeypatch):
+    """An install has no web/dist beside it, so the packaged copy is the only
+    one - putting the checkout first costs it nothing."""
+    import cortex.webui as webui
+
+    package = tmp_path / "site-packages" / "cortex"
+    packaged = package / "webui"
+    packaged.mkdir(parents=True)
+    (packaged / "index.html").write_text("installed", encoding="utf-8")
+
+    monkeypatch.delenv("CORTEX_WEB_DIR", raising=False)
+    monkeypatch.setattr(webui, "__file__", str(package / "webui.py"))
+
+    assert webui.find_web_dir() == packaged
+
+
+def test_the_build_time_is_reported(tmp_path):
+    """So a stale build is visible rather than mysterious."""
+    from cortex.webui import built_at
+
+    web = tmp_path / "dist"
+    web.mkdir()
+    assert built_at(web) is None
+
+    (web / "index.html").write_text("<html>", encoding="utf-8")
+    stamp = built_at(web)
+    assert stamp is not None
+    assert len(stamp) == 16  # YYYY-MM-DD HH:MM

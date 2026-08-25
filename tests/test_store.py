@@ -372,3 +372,43 @@ def test_installed_models_reads_capabilities(monkeypatch):
     # A model reporting nothing is treated as capable of nothing, not everything.
     assert models["mystery:1b"]["capabilities"] == []
     assert models["mystery:1b"]["can_chat"] is False
+
+
+# --- concurrent edits ------------------------------------------------------
+
+
+def test_an_edit_over_someone_elses_change_is_refused(conn, embedder):
+    """Two clients editing one note is normal once captures arrive from a
+    phone as well as a desktop."""
+    from cortex.store import StaleEditError
+
+    record = create_record(conn, embedder, project="P", title="T", body="Original.")
+    seen_at = record.updated_at
+
+    update_record(conn, embedder, record.id, body="Edited on the desktop.")
+
+    with pytest.raises(StaleEditError) as caught:
+        update_record(
+            conn, embedder, record.id, body="Edited on the phone.",
+            expected_updated_at=seen_at,
+        )
+
+    # Neither edit is lost: the desktop's stands, and the caller is handed the
+    # current version to decide with.
+    assert caught.value.record.body == "Edited on the desktop."
+    assert get_record(conn, record.id).body == "Edited on the desktop."
+
+
+def test_an_edit_from_the_current_version_succeeds(conn, embedder):
+    record = create_record(conn, embedder, project="P", title="T", body="Original.")
+    updated = update_record(
+        conn, embedder, record.id, body="Changed.", expected_updated_at=record.updated_at
+    )
+    assert updated.body == "Changed."
+
+
+def test_omitting_the_precondition_overwrites_deliberately(conn, embedder):
+    record = create_record(conn, embedder, project="P", title="T", body="Original.")
+    update_record(conn, embedder, record.id, body="First.")
+    forced = update_record(conn, embedder, record.id, body="Second.")
+    assert forced.body == "Second."

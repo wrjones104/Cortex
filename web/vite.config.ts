@@ -13,6 +13,15 @@ export default defineConfig({
         short_name: "Cortex",
         description: "A local-first AI knowledge vault.",
         start_url: "/capture",
+        share_target: {
+          action: "/capture",
+          method: "GET",
+          params: { title: "title", text: "text", url: "url" },
+        },
+        shortcuts: [
+          { name: "Capture a note", url: "/capture" },
+          { name: "Ask the vault", url: "/chat" },
+        ],
         scope: "/",
         display: "standalone",
         orientation: "portrait",

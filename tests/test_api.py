@@ -803,3 +803,32 @@ def test_the_option_count_is_bounded(chat_client):
     assert chat_client.post(
         "/api/generations", json={"prompt": "p", "count": 99}
     ).status_code == 422
+
+
+def test_editing_a_record_changed_elsewhere_is_a_409(client):
+    """The phone and the desktop both had it open."""
+    created = client.post("/api/records", json={"text": "Original note.", "project": "P"})
+    record = created.json()["record"]
+
+    client.patch(f"/api/records/{record['id']}", json={"body": "Desktop wins."})
+
+    conflict = client.patch(
+        f"/api/records/{record['id']}",
+        json={"body": "Phone loses.", "expected_updated_at": record["updated_at"]},
+    )
+
+    assert conflict.status_code == 409
+    assert "changed somewhere else" in conflict.json()["detail"]
+    assert client.get(f"/api/records/{record['id']}").json()["body"] == "Desktop wins."
+
+
+def test_editing_from_the_current_version_succeeds(client):
+    created = client.post("/api/records", json={"text": "Original.", "project": "P"})
+    record = created.json()["record"]
+
+    ok = client.patch(
+        f"/api/records/{record['id']}",
+        json={"body": "Fine.", "expected_updated_at": record["updated_at"]},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["body"] == "Fine."

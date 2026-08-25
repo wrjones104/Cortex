@@ -81,6 +81,12 @@ class RecordPatch(BaseModel):
     body: str | None = None
     category: str | None = None
     subcategory: str | None = None
+    expected_updated_at: str | None = Field(
+        default=None,
+        description="The updated_at you last saw. Send it and the edit is "
+        "refused with 409 if the record changed elsewhere; omit it to "
+        "overwrite deliberately.",
+    )
 
 
 class SearchHitOut(BaseModel):

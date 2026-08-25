@@ -23,6 +23,6 @@ data/
 .streamlit/secrets.toml
 
 # Web client
-web/node_modules/
+node_modules/
 web/dist/
 web/dev-dist/

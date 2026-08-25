@@ -1,17 +1,20 @@
 import { useMemo, useState } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { CortexApi, loadConnection, type Connection } from "./lib/api";
-import { ApiContext } from "./lib/useApi";
+import { ApiContext, useApi } from "./lib/useApi";
+import { useSync } from "./lib/useSync";
 import { Setup } from "./screens/Setup";
 import { Capture } from "./screens/Capture";
 import { Vault } from "./screens/Vault";
 import { Chat } from "./screens/Chat";
 import { Create } from "./screens/Create";
+import { Pending } from "./screens/Pending";
 import { RecordDetail } from "./screens/RecordDetail";
 import { Settings } from "./screens/Settings";
 
 export default function App() {
   const [connection, setConnection] = useState<Connection | null>(() => loadConnection());
+
 
   const value = useMemo(
     () =>
@@ -30,12 +33,32 @@ export default function App() {
   return (
     <ApiContext.Provider value={value}>
       <BrowserRouter>
-        <div className="app">
+        <Shell />
+      </BrowserRouter>
+    </ApiContext.Provider>
+  );
+}
+
+/**
+ * Inside the router, so the nav can show how many captures are still waiting
+ * to file. A queue you cannot see is a queue you cannot trust.
+ */
+function Shell() {
+  const { api } = useApi();
+  const { pendingCount } = useSync(api);
+
+  return (
+    <div className="app">
           <nav className="nav">
             <div className="brand">Cortex</div>
             <NavLink to="/capture">
               <PenIcon />
               <span>Capture</span>
+              {pendingCount > 0 && (
+                <span className="badge" aria-label={`${pendingCount} waiting to file`}>
+                  {pendingCount}
+                </span>
+              )}
             </NavLink>
             <NavLink to="/vault">
               <SearchIcon />
@@ -64,13 +87,12 @@ export default function App() {
               <Route path="/create" element={<Create />} />
               <Route path="/chat" element={<Chat />} />
               <Route path="/chat/:id" element={<Chat />} />
+              <Route path="/pending" element={<Pending />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/capture" replace />} />
             </Routes>
           </main>
-        </div>
-      </BrowserRouter>
-    </ApiContext.Provider>
+    </div>
   );
 }
 

@@ -1,21 +1,31 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { errorMessage, isApiError, type CaptureResult } from "../lib/api";
 import { useApi } from "../lib/useApi";
+import { useSync } from "../lib/useSync";
+import { enqueue } from "../lib/queue";
+import { isOnline } from "../lib/sync";
+import { dictate, voiceSupported, type Dictation } from "../lib/voice";
 import { Notice, ProjectPicker, Spinner } from "../components/ui";
 
 const DRAFT_KEY = "cortex.draft";
 
 /**
- * The fastest path in the app: type, pick a project, save.
+ * The fastest path in the app.
  *
- * The draft is mirrored to localStorage on every keystroke. Phone browsers
- * discard background tabs freely, and losing a note you just typed is the
- * worst thing a capture tool can do.
+ * Offline-first, but not offline-only: with a connection the note is filed
+ * straight away so you see what it was called and where it went, which is
+ * worth having on a desktop. Without one — or if the connection drops
+ * mid-request — it goes to the queue and returns immediately.
+ *
+ * The rule that matters: a capture is never lost. It is in the queue or it is
+ * in the vault, never in flight and forgotten.
  */
 export function Capture() {
   const { api } = useApi();
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const { pendingCount, online, syncing, sync } = useSync(api);
 
   const [text, setText] = useState(() => localStorage.getItem(DRAFT_KEY) ?? "");
   const [project, setProject] = useState("");
@@ -24,10 +34,15 @@ export function Capture() {
 
   const [stage, setStage] = useState<string | null>(null);
   const [saved, setSaved] = useState<CaptureResult | null>(null);
+  const [queued, setQueued] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [duplicateOf, setDuplicateOf] = useState<string | null>(null);
 
+  const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState("");
+  const dictation = useRef<Dictation | null>(null);
   const abort = useRef<AbortController | null>(null);
+  const consumedShare = useRef<string | null>(null);
 
   useEffect(() => {
     api.projects().then(
@@ -40,18 +55,90 @@ export function Capture() {
     localStorage.setItem(DRAFT_KEY, text);
   }, [text]);
 
-  useEffect(() => () => abort.current?.abort(), []);
+  // Arriving from Android's share sheet: the manifest routes the share here
+  // with the shared text as query parameters.
+  //
+  // The guard is load-bearing. Appending to state inside an effect means any
+  // re-run before the params clear appends a second copy — which React's
+  // development double-invocation does every single time. Marking the share
+  // consumed as it is read makes it happen once, whatever re-runs.
+  useEffect(() => {
+    const shared = [params.get("title"), params.get("text"), params.get("url")]
+      .filter((part) => part && part.trim())
+      .join("\n\n");
+    if (!shared || consumedShare.current === shared) return;
+
+    consumedShare.current = shared;
+    setText((current) => (current.trim() ? `${current}\n\n${shared}` : shared));
+    setParams(new URLSearchParams(), { replace: true });
+  }, [params, setParams]);
+
+  useEffect(
+    () => () => {
+      abort.current?.abort();
+      dictation.current?.stop();
+    },
+    [],
+  );
 
   const busy = stage !== null;
+
+  function toggleDictation() {
+    if (listening) {
+      dictation.current?.stop();
+      return;
+    }
+    setError(null);
+    const session = dictate({
+      onFinal: (phrase) => {
+        setText((current) =>
+          current ? `${current.replace(/\s+$/, "")} ${phrase.trim()}` : phrase.trim(),
+        );
+        setInterim("");
+      },
+      onInterim: setInterim,
+      onError: setError,
+      onEnd: () => {
+        setListening(false);
+        setInterim("");
+        dictation.current = null;
+      },
+    });
+    if (!session) {
+      setError("Dictation could not start on this device.");
+      return;
+    }
+    dictation.current = session;
+    setListening(true);
+  }
+
+  function clearDraft() {
+    setText("");
+    localStorage.removeItem(DRAFT_KEY);
+  }
+
+  async function queueIt(reason: string) {
+    await enqueue({ text, project: project.trim() || null, verbatim });
+    clearDraft();
+    setQueued(`Kept on this device — ${reason} It files itself when Cortex is reachable.`);
+    void sync();
+  }
 
   async function save(allowDuplicate = false) {
     if (!text.trim() || busy) return;
 
     setError(null);
     setSaved(null);
+    setQueued(null);
     setDuplicateOf(null);
-    setStage("starting");
 
+    // No signal: straight to the queue. No attempt, no waiting.
+    if (!isOnline()) {
+      await queueIt("you are offline.");
+      return;
+    }
+
+    setStage("starting");
     const controller = new AbortController();
     abort.current = controller;
 
@@ -68,13 +155,16 @@ export function Capture() {
       );
 
       setSaved(result);
-      setText("");
-      localStorage.removeItem(DRAFT_KEY);
-      // Keep the project selected: notes usually arrive in runs.
+      clearDraft();
     } catch (cause) {
       if ((cause as Error)?.name === "AbortError") return;
+
       if (isApiError(cause) && cause.status === 409) {
         setDuplicateOf(cause.message);
+      } else if (isApiError(cause) && (cause.status === 0 || cause.status >= 500)) {
+        // Unreachable or broken. Do not make someone retype a note, or wait
+        // for the network, because the server picked this moment to fall over.
+        await queueIt("Cortex did not answer.");
       } else {
         setError(errorMessage(cause));
       }
@@ -94,20 +184,67 @@ export function Capture() {
       </div>
 
       <div className="stack">
-        <textarea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          placeholder="What are you thinking?"
-          disabled={busy}
-          aria-label="Note"
-          onKeyDown={(event) => {
-            // Ctrl/Cmd+Enter saves, so a long note never needs the mouse.
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-              event.preventDefault();
-              void save();
-            }
-          }}
-        />
+        {!online && (
+          <Notice kind="warn">
+            Offline. Anything you capture stays on this device and files itself when
+            Cortex is reachable.
+          </Notice>
+        )}
+
+        {pendingCount > 0 && (
+          <div className="notice info row" style={{ justifyContent: "space-between" }}>
+            <span>
+              {pendingCount} note{pendingCount === 1 ? "" : "s"} waiting to file
+            </span>
+            <div className="row">
+              <button className="quiet" onClick={() => navigate("/pending")} type="button">
+                Show
+              </button>
+              <button
+                className="quiet"
+                onClick={() => void sync()}
+                disabled={syncing || !online}
+                type="button"
+              >
+                {syncing ? <Spinner label="Syncing" /> : "Sync now"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="composer-wrap">
+          <textarea
+            value={listening && interim ? `${text} ${interim}`.trim() : text}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="What are you thinking?"
+            disabled={busy}
+            aria-label="Note"
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void save();
+              }
+            }}
+          />
+          {voiceSupported() && (
+            <button
+              className={`mic ${listening ? "on" : ""}`}
+              onClick={toggleDictation}
+              disabled={busy}
+              type="button"
+              aria-label={listening ? "Stop dictating" : "Dictate"}
+              aria-pressed={listening}
+            >
+              <MicIcon />
+            </button>
+          )}
+        </div>
+
+        {listening && (
+          <div style={{ fontSize: "0.85rem", color: "var(--accent)" }}>
+            Listening&hellip; tap the microphone to stop.
+          </div>
+        )}
 
         <div>
           <label htmlFor="project">Project</label>
@@ -143,6 +280,7 @@ export function Capture() {
         </div>
 
         {error && <Notice kind="error">{error}</Notice>}
+        {queued && <Notice kind="ok">{queued}</Notice>}
 
         {duplicateOf && (
           <Notice kind="warn">
@@ -178,5 +316,22 @@ export function Capture() {
         )}
       </div>
     </>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0M12 18v4" />
+    </svg>
   );
 }

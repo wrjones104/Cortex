@@ -7,10 +7,10 @@ design docs, half-formed ideas — files them with a local LLM, and makes them f
 by meaning and by keyword. It runs entirely on [Ollama](https://ollama.com) and SQLite.
 Nothing leaves your computer.
 
-> **Status: rebuild in progress.** Milestones 1–5 are complete: the storage core,
-> the CLI, the HTTP API, an installable web client, conversations with managed
-> context, and brainstorming with selective banking. Offline capture on the phone is
-> next — see [Build order](#build-order).
+> **Status: rebuild complete through M6.** Storage core, CLI, HTTP API, an
+> installable web client, conversations with managed context, brainstorming with
+> selective banking, and offline capture that survives having no signal. Packaging is
+> what's left — see [Build order](#build-order).
 
 ---
 
@@ -147,7 +147,7 @@ generates a bearer token and stores it next to the vault; `cortex token` prints 
 | `GET /api/records` | List, filter by project, paginate |
 | `POST /api/records` | File a note |
 | `POST /api/records/stream` | Same, as server-sent events with progress |
-| `GET /api/records/{id}` · `PATCH` · `DELETE` | One record |
+| `GET /api/records/{id}` · `PATCH` · `DELETE` | One record. PATCH takes `expected_updated_at` and 409s if it changed elsewhere |
 | `GET /api/search` | Hybrid search |
 | `GET/POST /api/threads` | List and start conversations |
 | `GET/PATCH/DELETE /api/threads/{id}` | One conversation |
@@ -292,7 +292,7 @@ Librarian is a click and takes effect immediately. Only chat-capable models are
 offered — Ollama reports what each model can do, so an embedding model can no longer
 be selected as a chat model.
 
-### Installing it on a phone
+### On the phone
 
 Build once and serve the static files:
 
@@ -300,12 +300,30 @@ Build once and serve the static files:
 npm run build --prefix web
 ```
 
-Open the app on your phone and use "Add to Home Screen". The app shell is cached by a
-service worker, so it opens instantly. Point it at your Tailscale address, and Cortex
-travels with you.
+Open the app on your phone, point it at your Tailscale address, and use "Add to Home
+Screen". The app shell is cached by a service worker, so it opens instantly.
 
-> Offline *capture* — queueing notes with no signal and syncing later — is M6. The
-> API side is already built (`POST /api/sync`); the client queue is not.
+**Capture works with no signal.** A note goes into a queue on the device and the screen
+returns immediately — it never waits for a round trip, and never depends on one
+succeeding. The queue drains itself when the network comes back, when you reopen the
+app, or when you tap Sync. Every queued note carries an idempotency key, so a batch the
+phone was unsure about can be re-sent without duplicating anything.
+
+The model never runs on the handset. Queued notes are filed by the Librarian on your
+desktop when they arrive, which is where the GPU is.
+
+**Share to Cortex.** The app registers as a share target, so it appears in Android's
+share sheet. Highlight anything, share it, and it lands in the capture box.
+
+**Dictation.** The microphone button transcribes on the device via the Web Speech API,
+so it costs no round trip and works offline like everything else on that screen.
+
+> **Not included: true background sync.** A service worker draining the queue while the
+> app is closed would need the connection token, which lives in localStorage and a
+> service worker cannot read — so it would mean a second copy of the auth and sync
+> logic that could drift from the first. The window it would cover is between capturing
+> offline and next opening the app, and opening the app is how you capture the next
+> thing anyway.
 
 ---
 
@@ -350,9 +368,13 @@ pytest                  # unit tests, no model server needed
 pytest -m ollama        # integration tests against real models
 ruff check src tests
 
+npm test --prefix web        # the offline queue and its sync
 npm run build --prefix web   # typechecks as part of the build
 npx oxlint web/src
 ```
+
+The queue tests run against a real IndexedDB implementation rather than a mock,
+because that is the code a lost note would be lost in.
 
 The suite runs offline: `Embedder` and `Librarian` are protocols, and the tests inject
 deterministic fakes. Integration tests are marked `ollama` and skip themselves when the
@@ -386,7 +408,10 @@ src/cortex/
 web/
   src/
     lib/api.ts    typed client, including the SSE reader
-    screens/      Capture, Vault, RecordDetail, Settings, Setup
+    lib/queue.ts  the offline capture queue (IndexedDB)
+    lib/sync.ts   draining it, batched and idempotent
+    lib/voice.ts  on-device dictation
+    screens/      Capture, Vault, Chat, Create, Pending, Settings, Setup
     index.css     design tokens, mobile-first, both themes
 ```
 
@@ -404,8 +429,8 @@ over it.
 | **M3** | Web client: capture, vault, search, settings | ✅ done |
 | **M4** | Chat with persistent threads and managed context | ✅ done |
 | **M5** | Creative generation with selective banking | ✅ done |
-| **M6** | Offline capture, installable PWA, share target, voice | next |
-| **M7** | Packaging, Tailscale binding, first-run wizard | |
+| **M6** | Offline capture, installable PWA, share target, voice | ✅ done |
+| **M7** | Packaging, Tailscale binding, first-run wizard | next |
 
 ## The prototype
 

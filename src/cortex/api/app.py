@@ -49,6 +49,7 @@ from ..settings import get_settings, installed_models, normalise_model, set_sett
 from ..store import (
     DuplicateRecordError,
     RecordNotFoundError,
+    StaleEditError,
     count_records,
     delete_record,
     get_record,
@@ -437,9 +438,18 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
                 category=body.category,
                 subcategory=body.subcategory,
                 chunk_options=vault.chunk_options,
+                expected_updated_at=body.expected_updated_at,
             )
         except RecordNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except StaleEditError as exc:
+            # Hand back the current version so the client can show both and
+            # let the person choose, rather than dropping either edit.
+            raise HTTPException(
+                status_code=409,
+                detail=str(exc),
+                headers={"X-Cortex-Current": str(exc.record.updated_at)},
+            ) from exc
         except EmbeddingError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return RecordOut.of(updated)

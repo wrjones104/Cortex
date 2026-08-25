@@ -158,6 +158,21 @@ export interface BankResult {
   skipped: { ordinal: number; reason: string }[];
 }
 
+export interface SyncItemResult {
+  idempotency_key: string | null;
+  status: "stored" | "already_stored" | "duplicate" | "failed";
+  record: VaultRecord | null;
+  detail: string | null;
+}
+
+export interface SyncResponse {
+  results: SyncItemResult[];
+  stored: number;
+  already_stored: number;
+  duplicates: number;
+  failed: number;
+}
+
 export interface Connection {
   baseUrl: string;
   token: string;
@@ -293,12 +308,21 @@ export class CortexApi {
 
   updateRecord = (
     id: number,
-    patch: Partial<Pick<VaultRecord, "project" | "title" | "body" | "category" | "subcategory">>,
+    patch: Partial<
+      Pick<VaultRecord, "project" | "title" | "body" | "category" | "subcategory">
+    > & { expected_updated_at?: string },
   ) =>
     this.request<VaultRecord>(`/api/records/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
 
   deleteRecord = (id: number) =>
     this.request<void>(`/api/records/${id}`, { method: "DELETE" });
+
+  /** Drain a batch of captures queued offline. */
+  sync = (captures: CaptureInput[]) =>
+    this.request<SyncResponse>("/api/sync", {
+      method: "POST",
+      body: JSON.stringify({ captures }),
+    });
 
   generations = () => this.request<Generation[]>("/api/generations");
 

@@ -47,6 +47,22 @@ class RecordNotFoundError(LookupError):
     pass
 
 
+class StaleEditError(RuntimeError):
+    """Raised when a record changed since the editor last saw it.
+
+    Two clients editing the same note is normal once captures arrive from a
+    phone as well as a desktop. Refusing the write and handing back the
+    current version lets the person decide, rather than one edit silently
+    erasing the other.
+    """
+
+    def __init__(self, record: Record) -> None:
+        super().__init__(
+            f"'{record.title}' was changed somewhere else since you opened it."
+        )
+        self.record = record
+
+
 def utcnow() -> str:
     """Timezone-aware UTC, ISO 8601, with the offset kept.
 
@@ -267,9 +283,17 @@ def update_record(
     category: str | None = None,
     subcategory: str | None = None,
     chunk_options: dict | None = None,
+    expected_updated_at: str | None = None,
 ) -> Record:
-    """Update a record, re-chunking and re-embedding only when the body moved."""
+    """Update a record, re-chunking and re-embedding only when the body moved.
+
+    Pass expected_updated_at (the value the editor last saw) to refuse a write
+    over someone else's change. Omit it for a deliberate overwrite.
+    """
     existing = get_record(conn, record_id)
+
+    if expected_updated_at is not None and existing.updated_at != expected_updated_at:
+        raise StaleEditError(existing)
 
     new_title = existing.title if title is None else (title.strip() or "Untitled")
     new_body = existing.body if body is None else body.rstrip()

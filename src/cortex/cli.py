@@ -559,8 +559,8 @@ def serve(
         # here, because this is the moment someone is about to open it there.
         typer.secho(
             "\n  Serving plain HTTP on a non-local address. Browsers treat that as\n"
-            "  insecure, so on a phone there is no service worker, no install to\n"
-            "  the home screen, and no dictation.",
+            "  insecure, so on a phone there is no service worker and no install\n"
+            "  to the home screen.",
             fg=typer.colors.YELLOW,
         )
         typer.secho(

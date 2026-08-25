@@ -5,7 +5,6 @@ import { useApi } from "../lib/useApi";
 import { useSync } from "../lib/useSync";
 import { enqueue } from "../lib/queue";
 import { isOnline } from "../lib/sync";
-import { dictate, voiceSupported, type Dictation } from "../lib/voice";
 import { Notice, ProjectPicker, Spinner } from "../components/ui";
 
 const DRAFT_KEY = "cortex.draft";
@@ -38,9 +37,6 @@ export function Capture() {
   const [error, setError] = useState<string | null>(null);
   const [duplicateOf, setDuplicateOf] = useState<string | null>(null);
 
-  const [listening, setListening] = useState(false);
-  const [interim, setInterim] = useState("");
-  const dictation = useRef<Dictation | null>(null);
   const abort = useRef<AbortController | null>(null);
   const consumedShare = useRef<string | null>(null);
 
@@ -73,44 +69,9 @@ export function Capture() {
     setParams(new URLSearchParams(), { replace: true });
   }, [params, setParams]);
 
-  useEffect(
-    () => () => {
-      abort.current?.abort();
-      dictation.current?.stop();
-    },
-    [],
-  );
+  useEffect(() => () => abort.current?.abort(), []);
 
   const busy = stage !== null;
-
-  function toggleDictation() {
-    if (listening) {
-      dictation.current?.stop();
-      return;
-    }
-    setError(null);
-    const session = dictate({
-      onFinal: (phrase) => {
-        setText((current) =>
-          current ? `${current.replace(/\s+$/, "")} ${phrase.trim()}` : phrase.trim(),
-        );
-        setInterim("");
-      },
-      onInterim: setInterim,
-      onError: setError,
-      onEnd: () => {
-        setListening(false);
-        setInterim("");
-        dictation.current = null;
-      },
-    });
-    if (!session) {
-      setError("Dictation could not start on this device.");
-      return;
-    }
-    dictation.current = session;
-    setListening(true);
-  }
 
   function clearDraft() {
     setText("");
@@ -212,39 +173,19 @@ export function Capture() {
           </div>
         )}
 
-        <div className="composer-wrap">
-          <textarea
-            value={listening && interim ? `${text} ${interim}`.trim() : text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="What are you thinking?"
-            disabled={busy}
-            aria-label="Note"
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                event.preventDefault();
-                void save();
-              }
-            }}
-          />
-          {voiceSupported() && (
-            <button
-              className={`mic ${listening ? "on" : ""}`}
-              onClick={toggleDictation}
-              disabled={busy}
-              type="button"
-              aria-label={listening ? "Stop dictating" : "Dictate"}
-              aria-pressed={listening}
-            >
-              <MicIcon />
-            </button>
-          )}
-        </div>
-
-        {listening && (
-          <div style={{ fontSize: "0.85rem", color: "var(--accent)" }}>
-            Listening&hellip; tap the microphone to stop.
-          </div>
-        )}
+        <textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="What are you thinking?"
+          disabled={busy}
+          aria-label="Note"
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              void save();
+            }
+          }}
+        />
 
         <div>
           <label htmlFor="project">Project</label>
@@ -316,22 +257,5 @@ export function Capture() {
         )}
       </div>
     </>
-  );
-}
-
-function MicIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="9" y="2" width="6" height="12" rx="3" />
-      <path d="M5 11a7 7 0 0 0 14 0M12 18v4" />
-    </svg>
   );
 }

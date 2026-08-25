@@ -668,38 +668,7 @@ button.quiet {
 
 .idea input[type="number"] { width: 62px; }
 
-/* --- capture: dictation and queue -------------------------------------- */
-
-.composer-wrap { position: relative; }
-
-.mic {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  width: 42px;
-  height: 42px;
-  min-height: 0;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-}
-
-.mic svg { width: 20px; height: 20px; }
-
-.mic.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .mic.on { animation: pulse 1.6s ease-in-out infinite; }
-}
-
-@keyframes pulse {
-  50% { opacity: 0.62; }
-}
+/* --- capture: the pending queue ----------------------------------------- */
 
 /* The pending badge on the nav, so a queue is never invisible. */
 .nav a { position: relative; }

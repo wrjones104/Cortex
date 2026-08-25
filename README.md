@@ -271,11 +271,11 @@ devices and nothing else. `tailscale serve status` shows what is published;
 
 **Do it this way, not by binding to the tailnet address.** Two reasons:
 
-*HTTPS is not optional for the phone client.* Browsers only grant service workers,
-home-screen install and dictation to a *secure context* — HTTPS, or localhost. Over
-plain `http://100.x.y.z` the app still loads, but it will not install, will not cache
-its shell, and the microphone button disappears. Tailscale issues a real certificate,
-so all of that works.
+*HTTPS is not optional for the phone client.* Browsers only grant service workers and
+home-screen install to a *secure context* — HTTPS, or localhost. Over plain
+`http://100.x.y.z` the app still loads, but it will not install and will not cache its
+shell, so the offline queue runs without the thing that makes the app open instantly.
+Tailscale issues a real certificate, so both work.
 
 *No firewall hole.* Cortex keeps listening on localhost, where nothing needs to be
 allowed through. Binding to the tailnet address instead means adding an inbound rule
@@ -385,7 +385,6 @@ web/
     lib/api.ts    typed client, including the SSE reader
     lib/queue.ts  the offline capture queue (IndexedDB)
     lib/sync.ts   draining it, batched and idempotent
-    lib/voice.ts  on-device dictation
     screens/      Capture, Vault, Chat, Create, Pending, Settings, Setup
     index.css     design tokens, mobile-first, both themes
 ```

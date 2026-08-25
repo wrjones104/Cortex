@@ -91,13 +91,39 @@ serves the app itself.
 
 ### With Docker
 
+**You probably don't want this.** If Ollama already runs on your machine — especially
+on Windows or a Mac with a GPU — installing Cortex natively is simpler and faster, and
+Docker buys you nothing. The compose file is for a Linux box you want to hand the
+whole stack to.
+
 ```bash
 docker compose up -d
 ```
 
-Brings up Cortex and its own Ollama. Drop the `ollama` service from
-`docker-compose.yml` if you already run one, and point `CORTEX_OLLAMA_HOST` at it. The
-vault lives on a volume, so the container stays disposable and your notes do not.
+It brings up two services: Cortex, and an Ollama of its own. The `ollama` service
+exists for a machine that hasn't got one. **If you already run Ollama, delete that
+service** and point Cortex at the one you have:
+
+```yaml
+services:
+  cortex:
+    environment:
+      # Docker Desktop resolves this to the host. On Linux, add
+      # `extra_hosts: ["host.docker.internal:host-gateway"]` as well.
+      CORTEX_OLLAMA_HOST: http://host.docker.internal:11434
+```
+
+There is a real catch here, and it is worth understanding before you choose:
+
+> A container cannot reach an Ollama bound to `127.0.0.1`, because inside the container
+> that address is the container itself. So running Cortex in Docker against a host
+> Ollama means binding Ollama to something wider — which is exactly the exposure
+> `cortex doctor` warns about. Running Cortex natively lets you keep Ollama on
+> `127.0.0.1`, which is the safer arrangement and the reason to prefer it.
+
+The vault lives on a volume, so the container stays disposable and your notes do not.
+The bundled `ollama` service reserves an NVIDIA GPU; remove that `deploy` block to run
+on CPU.
 
 ---
 
@@ -466,17 +492,7 @@ over it.
 | **M4** | Chat with persistent threads and managed context | ✅ done |
 | **M5** | Creative generation with selective banking | ✅ done |
 | **M6** | Offline capture, installable PWA, share target, voice | ✅ done |
-| **M7** | Packaging, Tailscale binding, first-run wizard | next |
-
-## The prototype
-
-`app.py` is the original single-file Streamlit app. It still runs
-(`streamlit run app.py`, dependencies in `requirements.txt`) and reads its own separate
-`memory_bank/` database.
-
-The rebuild now covers everything the prototype did, and does it better. `app.py` is
-kept only as a reference for the moment; nothing depends on it, and it can be deleted
-whenever you like.
+| **M7** | Packaging, Tailscale binding, first-run wizard | ✅ done |
 
 ## Privacy
 

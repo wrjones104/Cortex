@@ -127,10 +127,43 @@ CREATE TABLE thread_facts (
 CREATE INDEX idx_facts_thread ON thread_facts(thread_id, id);
 """
 
+MIGRATION_3 = """
+-- Generations are kept so a second attempt cannot destroy a batch you had
+-- not finished mining, and so banking one idea is a small request rather than
+-- posting the whole batch back.
+CREATE TABLE generations (
+    id         INTEGER PRIMARY KEY,
+    prompt     TEXT NOT NULL,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    model      TEXT NOT NULL,
+    mode       TEXT NOT NULL CHECK (mode IN ('options', 'freeform')),
+    output     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_generations_created ON generations(created_at DESC);
+
+CREATE TABLE generation_ideas (
+    id               INTEGER PRIMARY KEY,
+    generation_id    INTEGER NOT NULL REFERENCES generations(id) ON DELETE CASCADE,
+    ordinal          INTEGER NOT NULL,
+    title            TEXT NOT NULL,
+    pitch            TEXT NOT NULL DEFAULT '',
+    detail           TEXT NOT NULL,
+    -- Set once an idea is banked, so the same one cannot be filed twice and
+    -- the UI can show which of a batch you already took.
+    banked_record_id INTEGER REFERENCES records(id) ON DELETE SET NULL,
+    UNIQUE (generation_id, ordinal)
+);
+
+CREATE INDEX idx_ideas_generation ON generation_ideas(generation_id, ordinal);
+"""
+
 # (version, description, sql)
 MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "initial schema", MIGRATION_1),
     (2, "chat threads, messages and the facts ledger", MIGRATION_2),
+    (3, "creative generations and their ideas", MIGRATION_3),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]

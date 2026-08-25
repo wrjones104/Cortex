@@ -160,4 +160,13 @@ def build_utility(vault: Vault) -> OllamaChat:
     )
 
 
+def build_creative(vault: Vault) -> OllamaChat:
+    """The model that brainstorms. Deliberately separate from the Librarian:
+    filing wants precision, brainstorming wants range."""
+    if _chatter_override is not None:
+        return _chatter_override
+    settings = get_settings(vault.conn, vault.config)
+    return OllamaChat(vault.config.ollama_host, settings.creative_model)
+
+
 Authed = Depends(require_token)

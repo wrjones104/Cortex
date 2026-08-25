@@ -663,3 +663,143 @@ def test_thread_list_reports_summary_and_fact_counts(chat_client):
     assert listed["has_summary"] is False
     assert listed["fact_count"] == 0
     assert listed["message_count"] == 0
+
+
+# --- brainstorming ---------------------------------------------------------
+
+
+def _ideas_json(*titles: str) -> str:
+    return json.dumps(
+        {
+            "ideas": [
+                {"title": t, "pitch": f"{t} in a line.", "detail": f"A paragraph on {t}."}
+                for t in titles
+            ]
+        }
+    )
+
+
+def test_generating_streams_and_stores_a_batch(chat_client):
+    chat_client.chatter.replies = [_ideas_json("Option One", "Option Two", "Option Three")]
+
+    response = chat_client.post(
+        "/api/generations", json={"prompt": "three ways the bell works", "count": 3}
+    )
+    assert response.status_code == 200
+
+    events = _parse_sse(response.text)
+    assert [n for n, _ in events][-1] == "done"
+
+    generation_id = events[-1][1]["generation_id"]
+    body = chat_client.get(f"/api/generations/{generation_id}").json()
+    assert [i["title"] for i in body["ideas"]] == ["Option One", "Option Two", "Option Three"]
+    assert all(i["banked"] is False for i in body["ideas"])
+
+
+def test_banking_one_idea_of_a_batch(chat_client):
+    """The point of the milestone: take the third, leave the rest."""
+    chat_client.chatter.replies = [_ideas_json("First", "Second", "Third")]
+    events = _parse_sse(
+        chat_client.post("/api/generations", json={"prompt": "three", "count": 3}).text
+    )
+    generation_id = events[-1][1]["generation_id"]
+
+    banked = chat_client.post(
+        f"/api/generations/{generation_id}/bank",
+        json={"ordinals": [2], "project": "Echoes"},
+    ).json()
+
+    assert [r["title"] for r in banked["banked"]] == ["Third"]
+    assert banked["skipped"] == []
+    assert chat_client.get("/api/records").json()["total"] == 1
+
+
+def test_banking_marks_the_idea_so_the_ui_can_show_it(chat_client):
+    chat_client.chatter.replies = [_ideas_json("Only")]
+    generation_id = _parse_sse(
+        chat_client.post("/api/generations", json={"prompt": "one", "count": 1}).text
+    )[-1][1]["generation_id"]
+
+    chat_client.post(
+        f"/api/generations/{generation_id}/bank", json={"ordinals": [0], "project": "P"}
+    )
+
+    idea = chat_client.get(f"/api/generations/{generation_id}").json()["ideas"][0]
+    assert idea["banked"] is True
+    assert idea["banked_record_id"] is not None
+
+
+def test_rebanking_the_same_idea_is_reported_not_duplicated(chat_client):
+    chat_client.chatter.replies = [_ideas_json("Only")]
+    generation_id = _parse_sse(
+        chat_client.post("/api/generations", json={"prompt": "one", "count": 1}).text
+    )[-1][1]["generation_id"]
+
+    payload = {"ordinals": [0], "project": "P"}
+    chat_client.post(f"/api/generations/{generation_id}/bank", json=payload)
+    again = chat_client.post(f"/api/generations/{generation_id}/bank", json=payload).json()
+
+    assert again["banked"] == []
+    assert again["skipped"][0]["reason"] == "Already filed."
+    assert chat_client.get("/api/records").json()["total"] == 1
+
+
+def test_freeform_then_split_then_bank(chat_client):
+    chat_client.chatter.replies = ["A ramble that contains two separate notions."]
+    generation_id = _parse_sse(
+        chat_client.post(
+            "/api/generations", json={"prompt": "ramble", "mode": "freeform"}
+        ).text
+    )[-1][1]["generation_id"]
+
+    assert chat_client.get(f"/api/generations/{generation_id}").json()["ideas"] == []
+
+    chat_client.chatter.replies = [_ideas_json("Notion A", "Notion B")]
+    split_body = chat_client.post(f"/api/generations/{generation_id}/split").json()
+    assert [i["title"] for i in split_body["ideas"]] == ["Notion A", "Notion B"]
+
+    banked = chat_client.post(
+        f"/api/generations/{generation_id}/bank", json={"ordinals": [1], "project": "P"}
+    ).json()
+    assert [r["title"] for r in banked["banked"]] == ["Notion B"]
+
+
+def test_generation_history_is_listed_newest_first(chat_client):
+    for prompt in ("first", "second"):
+        chat_client.chatter.replies = [_ideas_json("X")]
+        chat_client.post("/api/generations", json={"prompt": prompt, "count": 1})
+
+    listed = chat_client.get("/api/generations").json()
+    assert [g["prompt"] for g in listed] == ["second", "first"]
+
+
+def test_deleting_a_generation(chat_client):
+    chat_client.chatter.replies = [_ideas_json("X")]
+    generation_id = _parse_sse(
+        chat_client.post("/api/generations", json={"prompt": "p", "count": 1}).text
+    )[-1][1]["generation_id"]
+
+    assert chat_client.delete(f"/api/generations/{generation_id}").status_code == 204
+    assert chat_client.get(f"/api/generations/{generation_id}").status_code == 404
+
+
+def test_a_missing_generation_is_a_404(chat_client):
+    assert chat_client.get("/api/generations/999").status_code == 404
+    assert chat_client.delete("/api/generations/999").status_code == 404
+    assert chat_client.post("/api/generations/999/split").status_code == 404
+    assert (
+        chat_client.post("/api/generations/999/bank", json={"ordinals": [0]}).status_code == 404
+    )
+
+
+def test_an_empty_prompt_is_rejected(chat_client):
+    assert chat_client.post("/api/generations", json={"prompt": ""}).status_code == 422
+
+
+def test_the_option_count_is_bounded(chat_client):
+    assert chat_client.post(
+        "/api/generations", json={"prompt": "p", "count": 0}
+    ).status_code == 422
+    assert chat_client.post(
+        "/api/generations", json={"prompt": "p", "count": 99}
+    ).status_code == 422

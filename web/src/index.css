@@ -621,3 +621,46 @@ button.quiet {
   .chat-head .back { display: none; }
   .scope { max-width: 220px; }
 }
+
+/* --- create ------------------------------------------------------------ */
+
+.seg { display: flex; border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden; }
+
+.seg button {
+  border: none;
+  border-radius: 0;
+  padding: 8px 14px;
+  min-height: 0;
+  font-size: 0.88rem;
+  background: var(--surface);
+}
+
+.seg button + button { border-left: 1px solid var(--line-strong); }
+.seg button.on { background: var(--accent); color: var(--accent-ink); }
+.seg button:hover:not(:disabled) { border-color: transparent; }
+
+.idea {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.idea.picked { border-color: var(--accent); background: var(--accent-soft); }
+.idea.banked { opacity: 0.62; cursor: default; }
+
+.idea input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+.idea .pitch { font-size: 0.9rem; color: var(--muted); margin-top: 2px; }
+
+.idea details { margin-top: 7px; font-size: 0.9rem; }
+.idea summary { cursor: pointer; color: var(--faint); font-size: 0.8rem; }
+.idea details[open] summary { margin-bottom: 6px; }
+
+.idea input[type="number"] { width: 62px; }

@@ -74,6 +74,7 @@ class FakeLibrarian:
     def structure(self, raw_text, *, project=None, context=""):
         from cortex.llm import LibrarianError
 
+
         self.calls += 1
         self.last_context = context
         if self.fail:
@@ -174,6 +175,7 @@ class FakeChatter:
         self.model = model
         self._context = context_length
         self.calls: list[list[dict]] = []
+        self.formats: list[object] = []
         self.replies: list[str] = []
         self.prompt_tokens = 100
 
@@ -186,12 +188,14 @@ class FakeChatter:
             return self.replies.pop(0)
         return "An answer."
 
-    def complete(self, messages, *, think: bool = False):
+    def complete(self, messages, *, think: bool = False, format=None):
         self.calls.append(messages)
+        self.formats.append(format)
         return self._next_reply(messages), self.prompt_tokens
 
-    def stream(self, messages, *, think: bool = False):
+    def stream(self, messages, *, think: bool = False, format=None):
         self.calls.append(messages)
+        self.formats.append(format)
         reply = self._next_reply(messages)
         for word in reply.split(" "):
             yield ("token", word + " ")

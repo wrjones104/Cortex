@@ -270,3 +270,76 @@ def test_real_token_calibration_converges_on_the_model(real_vault, real_embedder
     assert 1.5 <= ratio <= 8.0
     # It should have moved off the default, in some direction.
     assert ratio != DEFAULT_CHARS_PER_TOKEN
+
+
+def test_real_options_generation_produces_separate_ideas(real_vault, real_embedder):
+    """Asking for the shape up front, against a real model.
+
+    The prototype produced one prose blob and banked it whole; the point of
+    the structured request is that each alternative arrives separable.
+    """
+    from cortex.creative import bank, generate, get_generation
+    from cortex.llm import OllamaChat
+
+    config = Config.from_env()
+    creative = OllamaChat(config.ollama_host, config.creative_model)
+
+    generation_id = None
+    for kind, payload in generate(
+        real_vault,
+        real_embedder,
+        creative,
+        "ways a harbour bell might be rung by the tide rather than by hand",
+        mode="options",
+        count=3,
+        project="Echoes",
+        use_context=False,
+    ):
+        if kind == "done":
+            generation_id = payload["generation_id"]
+
+    generation = get_generation(real_vault, generation_id)
+    assert generation.mode == "options", "the model should have produced usable JSON"
+    assert len(generation.ideas) >= 2
+
+    titles = [i.title for i in generation.ideas]
+    assert len(set(titles)) == len(titles), "alternatives should be distinct"
+    assert all(i.detail.strip() for i in generation.ideas)
+
+    # Bank exactly one of them - the thing the prototype could not do.
+    chosen = generation.ideas[1].ordinal
+    result = bank(real_vault, real_embedder, generation_id, [chosen], project="Echoes")
+
+    assert len(result.banked) == 1
+    assert result.banked[0].title == generation.ideas[1].title
+    assert get_generation(real_vault, generation_id).ideas[1].banked is True
+    assert sum(1 for i in get_generation(real_vault, generation_id).ideas if i.banked) == 1
+
+
+def test_a_banked_idea_is_findable_on_its_own(real_vault, real_embedder):
+    """Separate records mean separate embeddings, which is the payoff."""
+    from cortex.creative import bank, generate, get_generation
+    from cortex.llm import OllamaChat
+    from cortex.retrieve import search
+
+    config = Config.from_env()
+    creative = OllamaChat(config.ollama_host, config.creative_model)
+
+    generation_id = None
+    for kind, payload in generate(
+        real_vault, real_embedder, creative,
+        "two different mechanisms that could ring a bell using seawater",
+        mode="options", count=2, use_context=False,
+    ):
+        if kind == "done":
+            generation_id = payload["generation_id"]
+
+    generation = get_generation(real_vault, generation_id)
+    if len(generation.ideas) < 2:
+        pytest.skip("model did not return two options")
+
+    bank(real_vault, real_embedder, generation_id, [0], project="Echoes")
+
+    kept = generation.ideas[0]
+    hits = search(real_vault, real_embedder, kept.pitch or kept.title)
+    assert any(h.record.title == kept.title for h in hits)

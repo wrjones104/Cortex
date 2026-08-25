@@ -7,9 +7,10 @@ design docs, half-formed ideas — files them with a local LLM, and makes them f
 by meaning and by keyword. It runs entirely on [Ollama](https://ollama.com) and SQLite.
 Nothing leaves your computer.
 
-> **Status: rebuild in progress.** Milestones 1–4 are complete: the storage core,
-> the CLI, the HTTP API, an installable web client, and conversations with managed
-> context. Creative generation is next — see [Build order](#build-order).
+> **Status: rebuild in progress.** Milestones 1–5 are complete: the storage core,
+> the CLI, the HTTP API, an installable web client, conversations with managed
+> context, and brainstorming with selective banking. Offline capture on the phone is
+> next — see [Build order](#build-order).
 
 ---
 
@@ -101,6 +102,8 @@ Searches by meaning and by keyword at once. Each result says which arm matched i
 | `cortex import DIR` | Ingest a folder of Markdown, recursively |
 | `cortex backup` | Consistent snapshot via SQLite's online backup API |
 | `cortex reindex` | Rebuild chunks and embeddings from the records |
+| `cortex brainstorm` | Generate alternatives, or ramble with `--freeform` |
+| `cortex ideas` | Show a generation, `--split` a ramble, `--bank 0,2` what you liked |
 | `cortex ask` | Ask a question, in a conversation that is kept |
 | `cortex threads` | List conversations, `--delete N` to remove one |
 | `cortex doctor` | Check the vault and the model server |
@@ -149,6 +152,9 @@ generates a bearer token and stores it next to the vault; `cortex token` prints 
 | `GET/POST /api/threads` | List and start conversations |
 | `GET/PATCH/DELETE /api/threads/{id}` | One conversation |
 | `POST /api/threads/{id}/messages` | Ask, streamed as server-sent events |
+| `GET/POST /api/generations` | History, and brainstorming as server-sent events |
+| `POST /api/generations/{id}/split` | Cut a ramble into candidates |
+| `POST /api/generations/{id}/bank` | File the chosen ideas, one record each |
 | `POST /api/sync` | Drain a batch of captures queued offline |
 
 Every route except `/health` needs `Authorization: Bearer <token>`.
@@ -230,6 +236,33 @@ scrolling back later shows which answers were scoped to what.
 
 ---
 
+## Brainstorming
+
+```bash
+cortex brainstorm --project Echoes -n 4 "ways the harbour bell might work"
+cortex ideas 1 --bank 0,3
+```
+
+Two modes, because brainstorming happens two ways:
+
+**Alternatives** for when you know you want options. The count is part of the request
+and the model returns a structured array, which is far more reliable than cutting
+prose apart afterwards. You get a numbered list; you bank the ones you wanted.
+
+**Ramble** for when the good idea turns up mid-thought. Generate as prose, then
+`--split` it into candidates once you see something worth keeping.
+
+Either way **each idea becomes its own record**, with its own title and its own
+embedding — which is what makes it findable on its own later. Banking is **verbatim
+by default**: the prototype sent every banked idea back through the Librarian, handing
+a 27B model an unrequested rewrite of prose you had already decided you liked. Pass
+`--clean` when you do want it tidied.
+
+Generations are kept, so a second attempt never destroys a batch you had not finished
+mining, and ideas you already banked are marked so you cannot file one twice.
+
+---
+
 ## The web app
 
 One client for every device: a browser tab on the desktop, an installed app on the
@@ -247,6 +280,8 @@ remembers them. Three screens:
   works. Drafts survive a browser restart, and Ctrl/Cmd+Enter saves.
 - **Vault** — hybrid search across everything, filter by project, read, edit, delete.
   Each result says whether it matched by meaning, by keyword, or both.
+- **Create** — brainstorm alternatives or ramble, then tick the ideas worth keeping.
+  Earlier generations stay available.
 - **Chat** — conversations down the side, transcript in the middle. Progress shows
   while the model works, each answer lists the notes it read, and scope changes appear
   inline.
@@ -340,6 +375,7 @@ src/cortex/
   vault.py        opening a vault, with or without Ollama
   cli.py          the command line
   chat.py         threads, condensation, budgeting, compaction, the ledger
+  creative.py     brainstorming, splitting, selective banking
   tokens.py       token estimation that calibrates against real prompts
   settings.py     runtime model routing, stored in the vault
   api/
@@ -367,8 +403,8 @@ over it.
 | **M2** | FastAPI: REST + SSE, bearer auth, batched sync | ✅ done |
 | **M3** | Web client: capture, vault, search, settings | ✅ done |
 | **M4** | Chat with persistent threads and managed context | ✅ done |
-| **M5** | Creative generation with selective banking | next |
-| **M6** | Offline capture, installable PWA, share target, voice | |
+| **M5** | Creative generation with selective banking | ✅ done |
+| **M6** | Offline capture, installable PWA, share target, voice | next |
 | **M7** | Packaging, Tailscale binding, first-run wizard | |
 
 ## The prototype
@@ -377,9 +413,9 @@ over it.
 (`streamlit run app.py`, dependencies in `requirements.txt`) and reads its own separate
 `memory_bank/` database.
 
-The plan had it removed at M3. Chat has landed since, so only creative generation
-(M5) is still missing from the rebuild; the prototype is kept until that lands rather
-than dropping a working feature. Nothing depends on it.
+The rebuild now covers everything the prototype did, and does it better. `app.py` is
+kept only as a reference for the moment; nothing depends on it, and it can be deleted
+whenever you like.
 
 ## Privacy
 

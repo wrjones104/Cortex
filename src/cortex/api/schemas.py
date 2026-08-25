@@ -223,3 +223,46 @@ class ThreadPatch(BaseModel):
 
 class AskIn(BaseModel):
     message: str = Field(min_length=1)
+
+
+class IdeaOut(BaseModel):
+    ordinal: int
+    title: str
+    pitch: str
+    detail: str
+    banked: bool
+    banked_record_id: int | None = None
+
+
+class GenerationOut(BaseModel):
+    id: int
+    prompt: str
+    project: str | None
+    model: str
+    mode: str
+    output: str
+    created_at: str
+    ideas: list[IdeaOut]
+
+
+class GenerateIn(BaseModel):
+    prompt: str = Field(min_length=1)
+    mode: str = Field(default="options", description="options | freeform")
+    count: int = Field(default=4, ge=1, le=10)
+    project: str | None = None
+    use_context: bool = True
+
+
+class BankIn(BaseModel):
+    ordinals: list[int] = Field(description="Which ideas to file, by ordinal.")
+    project: str | None = None
+    verbatim: bool = Field(
+        default=True,
+        description="Store the idea as written. Set false to let the Librarian "
+        "retitle and categorise it first.",
+    )
+
+
+class BankOut(BaseModel):
+    banked: list[RecordOut]
+    skipped: list[dict]

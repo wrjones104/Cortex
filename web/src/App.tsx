@@ -6,6 +6,7 @@ import { Setup } from "./screens/Setup";
 import { Capture } from "./screens/Capture";
 import { Vault } from "./screens/Vault";
 import { Chat } from "./screens/Chat";
+import { Create } from "./screens/Create";
 import { RecordDetail } from "./screens/RecordDetail";
 import { Settings } from "./screens/Settings";
 
@@ -40,6 +41,10 @@ export default function App() {
               <SearchIcon />
               <span>Vault</span>
             </NavLink>
+            <NavLink to="/create">
+              <SparkIcon />
+              <span>Create</span>
+            </NavLink>
             <NavLink to="/chat">
               <ChatIcon />
               <span>Chat</span>
@@ -56,6 +61,7 @@ export default function App() {
               <Route path="/capture" element={<Capture />} />
               <Route path="/vault" element={<Vault />} />
               <Route path="/vault/:id" element={<RecordDetail />} />
+              <Route path="/create" element={<Create />} />
               <Route path="/chat" element={<Chat />} />
               <Route path="/chat/:id" element={<Chat />} />
               <Route path="/settings" element={<Settings />} />
@@ -92,6 +98,15 @@ function SearchIcon() {
     <svg {...iconProps}>
       <circle cx="11" cy="11" r="7" />
       <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
+
+function SparkIcon() {
+  return (
+    <svg {...iconProps}>
+      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }

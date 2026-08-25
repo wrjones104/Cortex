@@ -177,11 +177,13 @@ class Chatter(Protocol):
     @property
     def context_length(self) -> int: ...
 
-    def complete(self, messages: list[dict], *, think: bool = False) -> tuple[str, int]:
-        """Return (text, prompt_tokens)."""
+    def complete(
+        self, messages: list[dict], *, think: bool = False, format: Any = None
+    ) -> tuple[str, int]:
+        """Return (text, prompt_tokens). `format` may be a JSON schema."""
         ...
 
-    def stream(self, messages: list[dict], *, think: bool = False): ...
+    def stream(self, messages: list[dict], *, think: bool = False, format: Any = None): ...
 
 
 class OllamaChat:
@@ -229,10 +231,16 @@ class OllamaChat:
                 return value
         return FALLBACK_CONTEXT
 
-    def complete(self, messages: list[dict], *, think: bool = False) -> tuple[str, int]:
+    def complete(
+        self, messages: list[dict], *, think: bool = False, format: Any = None
+    ) -> tuple[str, int]:
         try:
             response = self._client.chat(
-                model=self.model, messages=messages, stream=False, think=think
+                model=self.model,
+                messages=messages,
+                stream=False,
+                think=think,
+                **({"format": format} if format is not None else {}),
             )
         except Exception as exc:  # noqa: BLE001 - surfaced with context
             raise LibrarianError(f"{self.model} failed: {type(exc).__name__}: {exc}") from exc
@@ -240,16 +248,25 @@ class OllamaChat:
         text = (response["message"]["content"] or "").strip()
         return text, int(response.get("prompt_eval_count") or 0)
 
-    def stream(self, messages: list[dict], *, think: bool = False):
+    def stream(self, messages: list[dict], *, think: bool = False, format: Any = None):
         """Yield ('token', text) as it arrives, then ('done', prompt_tokens).
 
         Reasoning tokens are yielded separately as ('thinking', text) so a
         client can show them without them landing in the stored answer. The
         prototype dropped them on the floor after paying for them.
+
+        `format` may carry a JSON schema. The tokens are then JSON rather than
+        prose, but they are still streamed: a 27B model takes a minute to
+        produce five developed ideas, and showing nothing for that long is
+        worse than showing progress a client can choose not to render.
         """
         try:
             chunks = self._client.chat(
-                model=self.model, messages=messages, stream=True, think=think
+                model=self.model,
+                messages=messages,
+                stream=True,
+                think=think,
+                **({"format": format} if format is not None else {}),
             )
             prompt_tokens = 0
             for chunk in chunks:

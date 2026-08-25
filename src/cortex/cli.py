@@ -539,3 +539,172 @@ def ask(
         fg=typer.colors.BRIGHT_BLACK,
     )
     vault.close()
+
+
+@app.command()
+def brainstorm(
+    prompt: str = typer.Argument(..., help="What to brainstorm."),
+    count: int = typer.Option(4, "--count", "-n", help="How many alternatives."),
+    freeform: bool = typer.Option(
+        False, "--freeform", help="Ramble as prose instead of producing options."
+    ),
+    project: str | None = typer.Option(None, "--project", "-p", help="Stay consistent with it."),
+) -> None:
+    """Brainstorm ideas, then bank the ones you want with `cortex ideas`."""
+    from .creative import generate
+    from .llm import OllamaChat
+    from .settings import get_settings
+
+    config = _config()
+    try:
+        vault = open_vault(config)
+    except EmbeddingError as exc:
+        _fail(f"{exc}\nIs Ollama running, and is '{config.embed_model}' pulled?")
+
+    settings = get_settings(vault.conn, config)
+    creative = OllamaChat(config.ollama_host, settings.creative_model)
+
+    generation_id = None
+    try:
+        for kind, payload in generate(
+            vault.conn,
+            vault.embedder,
+            creative,
+            prompt,
+            mode="freeform" if freeform else "options",
+            count=count,
+            project=project,
+        ):
+            if kind == "status":
+                typer.secho(f"  {payload}...", fg=typer.colors.BRIGHT_BLACK, err=True)
+            elif kind == "token" and freeform:
+                typer.echo(payload, nl=False)
+            elif kind == "done":
+                generation_id = payload["generation_id"]
+    except (LibrarianError, EmbeddingError) as exc:
+        vault.close()
+        _fail(str(exc))
+
+    if freeform:
+        typer.echo("")
+
+    _show_ideas(vault.conn, generation_id)
+    vault.close()
+
+
+def _show_ideas(conn, generation_id: int) -> None:
+    from .creative import get_generation
+
+    generation = get_generation(conn, generation_id)
+
+    if not generation.ideas:
+        typer.secho(f"\nGeneration #{generation.id}", fg=typer.colors.BRIGHT_BLACK)
+        typer.echo(f"Split it into ideas with: cortex ideas {generation.id} --split")
+        return
+
+    typer.echo("")
+    for idea in generation.ideas:
+        mark = "*" if idea.banked else " "
+        typer.secho(f"{mark} [{idea.ordinal}] ", fg=typer.colors.BRIGHT_BLACK, nl=False)
+        typer.secho(idea.title, bold=True, nl=False)
+        typer.echo(f" - {idea.pitch}" if idea.pitch else "")
+        typer.secho(f"      {idea.detail[:160]}", fg=typer.colors.BRIGHT_BLACK)
+
+    typer.secho(f"\nGeneration #{generation.id}", fg=typer.colors.BRIGHT_BLACK)
+    typer.secho(
+        f"Bank the ones you want: cortex ideas {generation.id} --bank 0,2",
+        fg=typer.colors.BRIGHT_BLACK,
+    )
+
+
+@app.command()
+def ideas(
+    generation_id: int | None = typer.Argument(None, help="Which generation to show."),
+    bank_these: str | None = typer.Option(
+        None, "--bank", help="Comma-separated ordinals to file, e.g. 0,2"
+    ),
+    do_split: bool = typer.Option(False, "--split", help="Cut a freeform ramble into ideas."),
+    project: str | None = typer.Option(None, "--project", "-p", help="File them here."),
+    clean: bool = typer.Option(
+        False, "--clean", help="Let the Librarian retitle and categorise before filing."
+    ),
+) -> None:
+    """Show a generation's ideas, split a ramble, or bank what you liked."""
+    from .creative import GenerationNotFoundError, bank, list_generations, split
+    from .llm import OllamaChat
+    from .settings import get_settings
+
+    config = _config()
+
+    if generation_id is None:
+        conn = open_readonly(config)
+        found = list_generations(conn)
+        if not found:
+            typer.echo("Nothing brainstormed yet. Try `cortex brainstorm`.")
+            conn.close()
+            return
+        for generation in found:
+            taken = sum(1 for i in generation.ideas if i.banked)
+            typer.secho(f"#{generation.id:<5}", fg=typer.colors.BRIGHT_BLACK, nl=False)
+            typer.echo(generation.prompt[:70])
+            typer.secho(
+                f"      {generation.mode} | {len(generation.ideas)} ideas | "
+                f"{taken} banked | {_local_time(generation.created_at)}",
+                fg=typer.colors.BRIGHT_BLACK,
+            )
+        conn.close()
+        return
+
+    try:
+        vault = open_vault(config)
+    except EmbeddingError as exc:
+        _fail(f"{exc}\nIs Ollama running, and is '{config.embed_model}' pulled?")
+
+    settings = get_settings(vault.conn, config)
+
+    try:
+        if do_split:
+            typer.secho("  Splitting...", fg=typer.colors.BRIGHT_BLACK, err=True)
+            split(
+                vault.conn,
+                vault.librarian,
+                OllamaChat(
+                    config.ollama_host, settings.utility_model or settings.librarian_model
+                ),
+                generation_id,
+            )
+
+        if bank_these:
+            try:
+                ordinals = [int(part) for part in bank_these.split(",") if part.strip()]
+            except ValueError:
+                vault.close()
+                _fail("--bank takes comma-separated numbers, e.g. --bank 0,2")
+
+            result = bank(
+                vault.conn,
+                vault.embedder,
+                generation_id,
+                ordinals,
+                librarian=vault.librarian,
+                project=project,
+                verbatim=not clean,
+                chunk_options=vault.chunk_options,
+            )
+            for record in result.banked:
+                typer.secho(
+                    f"Filed #{record.id} {record.title} -> {record.project_name}",
+                    fg=typer.colors.GREEN,
+                )
+            for ordinal, reason in result.skipped:
+                typer.secho(f"Skipped [{ordinal}]: {reason}", fg=typer.colors.YELLOW, err=True)
+
+        _show_ideas(vault.conn, generation_id)
+    except GenerationNotFoundError as exc:
+        vault.close()
+        _fail(str(exc))
+    except (LibrarianError, EmbeddingError) as exc:
+        vault.close()
+        _fail(str(exc))
+
+    vault.close()

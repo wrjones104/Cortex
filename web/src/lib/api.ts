@@ -127,6 +127,37 @@ export interface AnswerHandlers {
   onToken?: (text: string) => void;
 }
 
+export interface Idea {
+  ordinal: number;
+  title: string;
+  pitch: string;
+  detail: string;
+  banked: boolean;
+  banked_record_id: number | null;
+}
+
+export interface Generation {
+  id: number;
+  prompt: string;
+  project: string | null;
+  model: string;
+  mode: "options" | "freeform";
+  output: string;
+  created_at: string;
+  ideas: Idea[];
+}
+
+export interface GenerateDone {
+  generation_id: number;
+  ideas: number;
+  mode: string;
+}
+
+export interface BankResult {
+  banked: VaultRecord[];
+  skipped: { ordinal: number; reason: string }[];
+}
+
 export interface Connection {
   baseUrl: string;
   token: string;
@@ -268,6 +299,48 @@ export class CortexApi {
 
   deleteRecord = (id: number) =>
     this.request<void>(`/api/records/${id}`, { method: "DELETE" });
+
+  generations = () => this.request<Generation[]>("/api/generations");
+
+  generation = (id: number) => this.request<Generation>(`/api/generations/${id}`);
+
+  deleteGeneration = (id: number) =>
+    this.request<void>(`/api/generations/${id}`, { method: "DELETE" });
+
+  splitGeneration = (id: number) =>
+    this.request<Generation>(`/api/generations/${id}/split`, { method: "POST" });
+
+  bankIdeas = (
+    id: number,
+    body: { ordinals: number[]; project?: string | null; verbatim?: boolean },
+  ) =>
+    this.request<BankResult>(`/api/generations/${id}/bank`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+
+  /** Brainstorm, streaming progress while the model works. */
+  async brainstorm(
+    body: {
+      prompt: string;
+      mode: "options" | "freeform";
+      count?: number;
+      project?: string | null;
+      use_context?: boolean;
+    },
+    handlers: { onStatus?: (m: string) => void; onToken?: (t: string) => void } = {},
+    signal?: AbortSignal,
+  ): Promise<GenerateDone> {
+    return this.readEvents(
+      "/api/generations",
+      body,
+      {
+        status: (p) => handlers.onStatus?.(String(p)),
+        token: (p) => handlers.onToken?.(String(p)),
+      },
+      signal,
+    );
+  }
 
   threads = () => this.request<Thread[]>("/api/threads");
 

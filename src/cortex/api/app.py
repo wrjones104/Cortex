@@ -33,6 +33,15 @@ from ..chat import (
     set_thread_scope,
 )
 from ..config import Config
+from ..creative import (
+    GenerationNotFoundError,
+    bank,
+    delete_generation,
+    generate,
+    get_generation,
+    list_generations,
+    split,
+)
 from ..embed import EmbeddingError
 from ..llm import LibrarianError
 from ..retrieve import search as search_vault
@@ -52,8 +61,13 @@ from ..vault import Vault
 from . import deps
 from .schemas import (
     AskIn,
+    BankIn,
+    BankOut,
     CaptureIn,
     CaptureOut,
+    GenerateIn,
+    GenerationOut,
+    IdeaOut,
     MessageOut,
     ModelInfo,
     ModelStatus,
@@ -627,6 +641,172 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
             events(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # --- brainstorming ------------------------------------------------------
+
+    def _generation_out(generation) -> GenerationOut:
+        return GenerationOut(
+            id=generation.id,
+            prompt=generation.prompt,
+            project=generation.project,
+            model=generation.model,
+            mode=generation.mode,
+            output=generation.output,
+            created_at=generation.created_at,
+            ideas=[
+                IdeaOut(
+                    ordinal=i.ordinal,
+                    title=i.title,
+                    pitch=i.pitch,
+                    detail=i.detail,
+                    banked=i.banked,
+                    banked_record_id=i.banked_record_id,
+                )
+                for i in generation.ideas
+            ],
+        )
+
+    @app.get(
+        "/api/generations",
+        response_model=list[GenerationOut],
+        tags=["creative"],
+        dependencies=[deps.Authed],
+    )
+    def get_generations(
+        conn: sqlite3.Connection = Depends(deps.get_conn),
+    ) -> list[GenerationOut]:
+        return [_generation_out(g) for g in list_generations(conn)]
+
+    @app.get(
+        "/api/generations/{generation_id}",
+        response_model=GenerationOut,
+        tags=["creative"],
+        dependencies=[deps.Authed],
+    )
+    def get_one_generation(
+        generation_id: int, conn: sqlite3.Connection = Depends(deps.get_conn)
+    ) -> GenerationOut:
+        try:
+            return _generation_out(get_generation(conn, generation_id))
+        except GenerationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete(
+        "/api/generations/{generation_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["creative"],
+        dependencies=[deps.Authed],
+    )
+    def remove_generation(
+        generation_id: int, conn: sqlite3.Connection = Depends(deps.get_conn)
+    ) -> None:
+        try:
+            delete_generation(conn, generation_id)
+        except GenerationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/generations", tags=["creative"], dependencies=[deps.Authed])
+    def post_generation(body: GenerateIn) -> StreamingResponse:
+        """Brainstorm, streamed as server-sent events.
+
+        A 27B model takes around a minute to work up five developed
+        alternatives. In options mode the tokens are JSON rather than prose, so
+        a client should show progress rather than the text - but showing
+        nothing at all for a minute is worse.
+        """
+        config = deps.get_config()
+
+        def events() -> Iterator[str]:
+            def sse(event: str, payload: object) -> str:
+                return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+            outbox: queue.Queue[tuple[str, object] | None] = queue.Queue()
+
+            def work() -> None:
+                vault = None
+                try:
+                    vault = deps.build_vault(config)
+                    for kind, payload in generate(
+                        vault.conn,
+                        vault.embedder,
+                        deps.build_creative(vault),
+                        body.prompt,
+                        mode=body.mode,
+                        count=body.count,
+                        project=body.project,
+                        use_context=body.use_context,
+                    ):
+                        outbox.put((kind, payload))
+                except ValueError as exc:
+                    outbox.put(("error", {"status": 400, "detail": str(exc)}))
+                except (EmbeddingError, LibrarianError) as exc:
+                    outbox.put(("error", {"status": 503, "detail": str(exc)}))
+                except Exception as exc:  # noqa: BLE001 - must reach the client
+                    outbox.put(
+                        ("error", {"status": 500, "detail": f"{type(exc).__name__}: {exc}"})
+                    )
+                finally:
+                    if vault is not None:
+                        vault.close()
+                    outbox.put(None)
+
+            threading.Thread(target=work, daemon=True).start()
+
+            while (item := outbox.get()) is not None:
+                yield sse(*item)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post(
+        "/api/generations/{generation_id}/split",
+        response_model=GenerationOut,
+        tags=["creative"],
+        dependencies=[deps.Authed],
+    )
+    def post_split(generation_id: int, vault: Vault = Depends(deps.get_vault)) -> GenerationOut:
+        """Cut a freeform generation into bankable candidates."""
+        try:
+            split(vault.conn, vault.librarian, deps.build_utility(vault), generation_id)
+        except GenerationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except LibrarianError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return _generation_out(get_generation(vault.conn, generation_id))
+
+    @app.post(
+        "/api/generations/{generation_id}/bank",
+        response_model=BankOut,
+        tags=["creative"],
+        dependencies=[deps.Authed],
+    )
+    def post_bank(
+        generation_id: int, body: BankIn, vault: Vault = Depends(deps.get_vault)
+    ) -> BankOut:
+        """File the chosen ideas, one record each."""
+        try:
+            result = bank(
+                vault.conn,
+                vault.embedder,
+                generation_id,
+                body.ordinals,
+                librarian=vault.librarian,
+                project=body.project,
+                verbatim=body.verbatim,
+                chunk_options=vault.chunk_options,
+            )
+        except GenerationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EmbeddingError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        return BankOut(
+            banked=[RecordOut.of(r) for r in result.banked],
+            skipped=[{"ordinal": o, "reason": r} for o, r in result.skipped],
         )
 
     # --- sync --------------------------------------------------------------

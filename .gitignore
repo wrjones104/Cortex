@@ -1,6 +1,30 @@
+# Virtual environments
 venv/
+.venv/
+
+# Python
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Vault data - never commit your notes
 memory_bank/
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Local config
 .env
 .streamlit/secrets.toml
+
+# Web client
+node_modules/
+# Built client copied in for packaging; derived from web/dist
+src/cortex/webui/
+web/dist/
+web/dev-dist/

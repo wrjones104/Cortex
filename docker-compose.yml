@@ -1,0 +1,39 @@
+# Cortex plus its own Ollama. Drop the `ollama` service if you already run one
+# on the host and point CORTEX_OLLAMA_HOST at it instead.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    # Not published: only Cortex needs to reach it, over the compose network.
+    expose:
+      - "11434"
+    restart: unless-stopped
+    # Drop this block if you have no NVIDIA GPU; it will run on CPU.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  cortex:
+    build: .
+    depends_on:
+      - ollama
+    environment:
+      CORTEX_OLLAMA_HOST: http://ollama:11434
+      CORTEX_DATA_DIR: /data
+    volumes:
+      - vault:/data
+    ports:
+      # 127.0.0.1 on purpose: bind to your tailnet address instead of
+      # publishing this to every interface.
+      - "127.0.0.1:8765:8765"
+    restart: unless-stopped
+
+volumes:
+  ollama:
+  vault:

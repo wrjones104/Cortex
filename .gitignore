@@ -24,5 +24,7 @@ data/
 
 # Web client
 node_modules/
+# Built client copied in for packaging; derived from web/dist
+src/cortex/webui/
 web/dist/
 web/dev-dist/

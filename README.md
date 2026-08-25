@@ -7,10 +7,9 @@ design docs, half-formed ideas — files them with a local LLM, and makes them f
 by meaning and by keyword. It runs entirely on [Ollama](https://ollama.com) and SQLite.
 Nothing leaves your computer.
 
-> **Status: rebuild complete through M6.** Storage core, CLI, HTTP API, an
-> installable web client, conversations with managed context, brainstorming with
-> selective banking, and offline capture that survives having no signal. Packaging is
-> what's left — see [Build order](#build-order).
+> **Status: the rebuild is done.** Storage core, CLI, HTTP API, an installable web
+> client, conversations with managed context, brainstorming with selective banking,
+> offline capture, and a first run that checks its own footing.
 
 ---
 
@@ -62,16 +61,43 @@ ollama pull qwen2.5:14b
 
 ```bash
 uv venv && uv pip install -e ".[api,dev]"
+npm --prefix web install && npm run build --prefix web
+cortex setup
 ```
 
-Check everything is wired up:
+`cortex setup` checks everything Cortex needs — the vault, Ollama, each configured
+model, and whether Ollama is exposed beyond your machine — offers to pull anything
+missing, and prints your API token.
 
 ```bash
-cortex doctor
+cortex serve
 ```
 
-`doctor` reports where your vault lives, how many records it holds, whether the two
-indexes agree, and whether Ollama has the models you've configured.
+One command, one port. The API and the web app are served together at
+`http://127.0.0.1:8765`, so there is no second server and no CORS to think about.
+
+`cortex doctor` re-runs the checks any time.
+
+### As a package
+
+```bash
+npm run build --prefix web && cp -r web/dist src/cortex/webui
+uv build
+pipx install dist/cortex-*.whl
+```
+
+The web client is copied into the package before building, so an installed Cortex
+serves the app itself.
+
+### With Docker
+
+```bash
+docker compose up -d
+```
+
+Brings up Cortex and its own Ollama. Drop the `ollama` service from
+`docker-compose.yml` if you already run one, and point `CORTEX_OLLAMA_HOST` at it. The
+vault lives on a volume, so the container stays disposable and your notes do not.
 
 ---
 
@@ -106,7 +132,8 @@ Searches by meaning and by keyword at once. Each result says which arm matched i
 | `cortex ideas` | Show a generation, `--split` a ramble, `--bank 0,2` what you liked |
 | `cortex ask` | Ask a question, in a conversation that is kept |
 | `cortex threads` | List conversations, `--delete N` to remove one |
-| `cortex doctor` | Check the vault and the model server |
+| `cortex setup` | First run: check everything, pull what's missing |
+| `cortex doctor` | Check the vault, the model server, and its exposure |
 | `cortex serve` | Run the HTTP API |
 | `cortex token` | Print the API token |
 
@@ -190,13 +217,19 @@ before any model runs, and each item comes back as `stored`, `already_stored`,
 
 ### Reaching it from another device
 
-Bind to a [Tailscale](https://tailscale.com) address rather than a public one:
-
 ```bash
-cortex serve --host 100.x.y.z
+cortex serve --tailscale
 ```
 
-Ollama itself stays on `127.0.0.1` and is never exposed — only Cortex talks to it.
+Binds to this machine's [Tailscale](https://tailscale.com) address, which it finds for
+you. Your own devices can reach it; nothing else can. Open that address on your phone
+and add it to your home screen.
+
+> **Check Ollama too.** Cortex requires a token on every route. Ollama requires
+> nothing — so an Ollama listening on `0.0.0.0` means anyone who can reach the machine
+> can use your models and read what is sent through them, whatever Cortex does.
+> `cortex doctor` tests this by actually calling Ollama on a non-loopback address and
+> tells you if it answers. The fix is `OLLAMA_HOST=127.0.0.1` and a restart.
 
 ---
 
@@ -342,6 +375,7 @@ All optional — the defaults work.
 | `CORTEX_CHUNK_TARGET` / `_MAX` / `_OVERLAP` | `400` / `512` / `60` |
 | `CORTEX_MAX_DISTANCE` | per embedding model |
 | `CORTEX_API_TOKEN` | generated on first run |
+| `CORTEX_WEB_DIR` | the packaged client, then `web/dist` |
 
 `CORTEX_MAX_DISTANCE` is the relevance floor for the vector arm — how far a vector hit
 may be before it is dropped. Without one, a query about something you never wrote hands
@@ -400,6 +434,8 @@ src/cortex/
   creative.py     brainstorming, splitting, selective banking
   tokens.py       token estimation that calibrates against real prompts
   settings.py     runtime model routing, stored in the vault
+  setup_wizard.py first-run checks, model pulling, exposure detection
+  webui.py        serving the built client, with an SPA fallback
   api/
     app.py        routes
     deps.py       auth and per-request resources

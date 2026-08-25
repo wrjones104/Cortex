@@ -59,6 +59,7 @@ from ..store import (
     update_record,
 )
 from ..vault import Vault
+from ..webui import find_web_dir, mount
 from . import deps
 from .schemas import (
     AskIn,
@@ -91,7 +92,9 @@ from .schemas import (
 )
 
 
-def create_app(config: Config | None = None, token: str | None = None) -> FastAPI:
+def create_app(
+    config: Config | None = None, token: str | None = None, *, serve_web: bool = True
+) -> FastAPI:
     if config is not None:
         deps.configure(config, token)
 
@@ -113,6 +116,14 @@ def create_app(config: Config | None = None, token: str | None = None) -> FastAP
     )
 
     _register(app)
+
+    # After the API routes: the SPA fallback matches everything, and the
+    # first matching route wins.
+    if serve_web:
+        web_dir = find_web_dir()
+        if web_dir is not None:
+            mount(app, web_dir)
+
     return app
 
 

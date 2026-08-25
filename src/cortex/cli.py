@@ -373,6 +373,24 @@ def doctor() -> None:
         return
 
     typer.secho(f"  reachable, {len(installed)} model(s)", fg=typer.colors.GREEN)
+
+    from .setup_wizard import ollama_exposure
+
+    exposed = ollama_exposure(config)
+    if exposed:
+        typer.secho(
+            f"  EXPOSED    Ollama answers on {exposed}, not just this machine.",
+            fg=typer.colors.RED,
+            bold=True,
+        )
+        typer.secho(
+            "             It has no authentication, so anyone who can reach that\n"
+            "             address can use your models and read what is sent to them.\n"
+            "             Set OLLAMA_HOST=127.0.0.1 and restart Ollama.",
+            fg=typer.colors.RED,
+        )
+    else:
+        typer.secho("  private    Ollama answers on this machine only", fg=typer.colors.GREEN)
     for label, name in (
         ("embed", config.embed_model),
         ("librarian", config.librarian_model),
@@ -401,8 +419,12 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Interface to bind."),
     port: int = typer.Option(8765, "--port", help="Port to listen on."),
     reload: bool = typer.Option(False, "--reload", help="Restart on code changes."),
+    tailscale: bool = typer.Option(
+        False, "--tailscale", help="Bind to this machine's tailnet address."
+    ),
+    web: bool = typer.Option(True, "--web/--no-web", help="Also serve the browser client."),
 ) -> None:
-    """Run the HTTP API."""
+    """Run Cortex: the API, and the web app with it."""
     try:
         import uvicorn
     except ImportError as exc:
@@ -411,24 +433,49 @@ def serve(
 
     from .api import create_app
     from .config import load_or_create_token
+    from .setup_wizard import tailscale_address
+    from .webui import find_web_dir
 
     config = _config()
-    api_token = load_or_create_token(config.data_dir)
 
-    typer.secho(f"Cortex API on http://{host}:{port}", fg=typer.colors.GREEN, bold=True)
+    if tailscale:
+        address = tailscale_address()
+        if not address:
+            _fail("Could not find a Tailscale address. Is Tailscale installed and connected?")
+        host = address
+
+    api_token = load_or_create_token(config.data_dir)
+    web_dir = find_web_dir() if web else None
+
+    typer.secho(f"Cortex on http://{host}:{port}", fg=typer.colors.GREEN, bold=True)
+    if web_dir is not None:
+        typer.echo(f"  app    http://{host}:{port}")
+    elif web:
+        typer.secho(
+            "  app    not built - run: npm run build --prefix web",
+            fg=typer.colors.YELLOW,
+        )
     typer.echo(f"  docs   http://{host}:{port}/docs")
     typer.echo(f"  vault  {config.db_path}")
     typer.echo(f"  token  {api_token}")
 
-    if host not in ("127.0.0.1", "localhost", "::1"):
+    if host in ("0.0.0.0", "::"):  # noqa: S104 - detecting it, not binding it
         typer.secho(
-            f"\n  Binding to {host} exposes this API beyond your machine.\n"
-            "  Put it on a Tailscale address rather than a public one, and never\n"
-            "  expose Ollama itself.",
-            fg=typer.colors.YELLOW,
+            "\n  Binding to every interface puts Cortex on any network this machine\n"
+            "  is attached to. Prefer --tailscale, which reaches your own devices\n"
+            "  without exposing anything.",
+            fg=typer.colors.RED,
+        )
+    elif host not in ("127.0.0.1", "localhost", "::1"):
+        typer.secho(
+            f"\n  Reachable from other machines at {host}. Ollama itself stays on\n"
+            "  127.0.0.1 and is never exposed - only Cortex talks to it.",
+            fg=typer.colors.BRIGHT_BLACK,
         )
 
-    uvicorn.run(create_app(config, api_token), host=host, port=port, reload=reload)
+    uvicorn.run(
+        create_app(config, api_token, serve_web=web), host=host, port=port, reload=reload
+    )
 
 
 @app.command()
@@ -708,3 +755,74 @@ def ideas(
         _fail(str(exc))
 
     vault.close()
+
+
+@app.command()
+def setup(
+    pull_missing: bool = typer.Option(
+        True, "--pull/--no-pull", help="Offer to download any missing models."
+    ),
+) -> None:
+    """Check everything Cortex needs, and set up what is missing."""
+    from .setup_wizard import inspect, prepare_vault, pull, tailscale_address
+
+    config = _config()
+
+    typer.secho("Cortex setup", bold=True)
+    typer.echo("")
+
+    plan = inspect(config)
+    for check in plan.checks:
+        mark = "ok  " if check.ok else "--  "
+        colour = typer.colors.GREEN if check.ok else typer.colors.YELLOW
+        typer.secho(f"  {mark}", fg=colour, nl=False)
+        typer.echo(f"{check.name.ljust(16)} {check.detail}")
+        if check.fix and not check.ok:
+            typer.secho(f"      {check.fix}", fg=typer.colors.BRIGHT_BLACK)
+
+    if plan.missing_models and pull_missing:
+        typer.echo("")
+        names = ", ".join(model for _, model in plan.missing_models)
+        if typer.confirm(f"Download {names} now?", default=True):
+            for role, model in plan.missing_models:
+                typer.secho(f"  pulling {model} ({role})", fg=typer.colors.BRIGHT_BLACK)
+                last = ""
+                try:
+                    for status, percent in pull(config, model):
+                        line = status if percent < 0 else f"{status} {percent}%"
+                        if line != last:
+                            typer.echo(f"\r    {line.ljust(48)}", nl=False)
+                            last = line
+                except Exception as exc:  # noqa: BLE001 - reported below
+                    typer.echo("")
+                    typer.secho(f"    failed: {exc}", fg=typer.colors.RED)
+                    continue
+                typer.echo("")
+                typer.secho(f"    {model} ready", fg=typer.colors.GREEN)
+            plan = inspect(config)
+
+    token = prepare_vault(config)
+
+    typer.echo("")
+    if plan.ready:
+        typer.secho("Everything is in place.", fg=typer.colors.GREEN, bold=True)
+    else:
+        typer.secho(
+            "Some things still need attention - see above.", fg=typer.colors.YELLOW, bold=True
+        )
+
+    typer.echo("")
+    typer.secho("Next", bold=True)
+    typer.echo("  cortex capture \"a first thought\"     file something")
+    typer.echo("  cortex serve                          open the web app")
+    typer.echo("")
+    typer.secho(f"  Your API token: {token}", fg=typer.colors.BRIGHT_BLACK)
+
+    address = tailscale_address()
+    if address:
+        typer.echo("")
+        typer.secho("Reaching it from your phone", bold=True)
+        typer.echo(f"  cortex serve --tailscale       binds to {address}")
+        typer.echo(
+            f"  Open http://{address}:8765 on the phone and add it to your home screen."
+        )

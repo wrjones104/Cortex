@@ -1,0 +1,15 @@
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+web/node_modules/
+web/dist/
+web/dev-dist/
+src/cortex/webui/
+memory_bank/
+data/
+*.db

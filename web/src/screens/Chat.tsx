@@ -8,8 +8,17 @@ import {
   type ThreadDetail,
 } from "../lib/api";
 import { useApi } from "../lib/useApi";
-import { Empty, Notice, Spinner } from "../components/ui";
+import { Empty, Notice, Spinner, TypingIndicator } from "../components/ui";
+import { Markdown } from "../components/Markdown";
+import { ChatBotAvatar, UserAvatar, ChatHero } from "../components/Illustrations";
 import { localTime } from "../lib/time";
+
+const STARTER_PROMPTS = [
+  "What projects are in my vault right now?",
+  "Summarize the most recent notes I've captured",
+  "What ideas or brainstorms do I have stored?",
+  "Connect any related notes across all my projects",
+];
 
 /**
  * Conversations with the vault.
@@ -18,7 +27,7 @@ import { localTime } from "../lib/time";
  * landing view and a conversation replaces it, which is what a thumb expects.
  */
 export function Chat() {
-  const { api } = useApi();
+  const { api, account } = useApi();
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const threadId = id ? Number(id) : null;
@@ -32,6 +41,7 @@ export function Chat() {
   const [status, setStatus] = useState<string | null>(null);
   const [streaming, setStreaming] = useState("");
   const [pendingSources, setPendingSources] = useState<string[]>([]);
+  const [copiedId, setCopiedId] = useState<number | null>(null);
 
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement | null>(null);
@@ -83,8 +93,8 @@ export function Chat() {
     }
   }
 
-  async function send() {
-    const question = draft.trim();
+  async function send(textToSend?: string) {
+    const question = (textToSend ?? draft).trim();
     if (!question || busy || threadId === null) return;
 
     setError(null);
@@ -162,21 +172,34 @@ export function Chat() {
     }
   }
 
+  function copyMessageText(msgId: number, text: string) {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopiedId(msgId);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  }
+
   const showList = threadId === null;
 
   return (
     <div className={`chat ${showList ? "chat-list-only" : "chat-open"}`}>
       <aside className="chat-threads">
-        <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
-          <h1 style={{ fontSize: "1.25rem" }}>Conversations</h1>
-          <button className="primary" onClick={() => void startThread()} type="button">
-            New
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+          <h1 style={{ fontSize: "1.25rem", display: "flex", alignItems: "center", gap: 8 }}>
+            <span>💬 Conversations</span>
+          </h1>
+          <button className="primary bouncy-btn" onClick={() => void startThread()} type="button">
+            + New
           </button>
         </div>
 
         {threads === null && <Spinner label="Loading..." />}
         {threads?.length === 0 && (
-          <Empty title="No conversations yet" hint="Ask your vault something." />
+          <Empty
+            title="No conversations yet"
+            hint="Ask your vault something."
+            illustration={<ChatHero size={54} />}
+          />
         )}
 
         <div className="list">
@@ -188,16 +211,16 @@ export function Chat() {
               <button className="thread-open" onClick={() => navigate(`/chat/${thread.id}`)}>
                 <h3>{thread.title}</h3>
                 <div className="meta">
-                  <span>{thread.project ?? "all projects"}</span>
-                  <span className="dot">|</span>
-                  <span>{thread.message_count} messages</span>
+                  <span className="chip project-chip">{thread.project ?? "all projects"}</span>
+                  <span className="dot">•</span>
+                  <span>{thread.message_count} msgs</span>
                   {thread.has_summary && (
                     <>
-                      <span className="dot">|</span>
-                      <span className="chip">summarised</span>
+                      <span className="dot">•</span>
+                      <span className="chip summary-chip">✨ summarized</span>
                     </>
                   )}
-                  <span className="dot">|</span>
+                  <span className="dot">•</span>
                   <span>{localTime(thread.updated_at)}</span>
                 </div>
               </button>
@@ -217,19 +240,31 @@ export function Chat() {
       <section className="chat-panel">
         {threadId === null ? (
           <div className="chat-empty">
-            <Empty title="Pick a conversation" hint="Or start a new one." />
+            <Empty
+              title="Pick a conversation"
+              hint="Or start a new one to talk with your Librarian."
+              illustration={<ChatHero size={88} />}
+            />
+            <button
+              className="primary bouncy-btn"
+              onClick={() => void startThread()}
+              type="button"
+              style={{ marginTop: 16 }}
+            >
+              Start New Chat
+            </button>
           </div>
         ) : (
           <>
             <div className="chat-head">
-              <button className="quiet back" onClick={() => navigate("/chat")} type="button">
-                &larr;
+              <button className="quiet back bouncy-btn" onClick={() => navigate("/chat")} type="button">
+                &larr; Back
               </button>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <h2 className="truncate">{detail?.thread.title ?? "..."}</h2>
                 {detail && detail.facts.length > 0 && (
                   <details className="facts">
-                    <summary>{detail.facts.length} things it remembers</summary>
+                    <summary>🧠 {detail.facts.length} things remembered</summary>
                     <ul>
                       {detail.facts.map((fact) => (
                         <li key={fact}>{fact}</li>
@@ -245,10 +280,10 @@ export function Chat() {
                 className="scope"
                 disabled={busy}
               >
-                <option value="">All projects</option>
+                <option value="">🌐 All projects</option>
                 {projects.map((project) => (
                   <option key={project.slug} value={project.name}>
-                    {project.name}
+                    📁 {project.name}
                   </option>
                 ))}
               </select>
@@ -256,48 +291,122 @@ export function Chat() {
 
             <div className="transcript">
               {detail?.messages.length === 0 && !busy && (
-                <Empty title="Ask anything" hint="Answers come only from your own notes." />
+                <div className="chat-welcome stack" style={{ alignItems: "center", margin: "24px 0" }}>
+                  <Empty
+                    title="Ask the Librarian anything!"
+                    hint="Answers are grounded directly in your notes and thoughts."
+                    illustration={<ChatHero size={72} />}
+                  />
+                  <div className="starter-prompts">
+                    <span className="starter-title">Try asking:</span>
+                    <div className="starter-grid">
+                      {STARTER_PROMPTS.map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          className="starter-chip"
+                          onClick={() => {
+                            setDraft(prompt);
+                          }}
+                        >
+                          💡 {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               )}
 
               {detail?.messages.map((message) =>
                 message.role === "marker" ? (
                   <div key={message.id} className="marker">
-                    {message.content}
+                    <span>✨ {message.content}</span>
                   </div>
                 ) : (
-                  <div key={message.id} className={`bubble ${message.role}`}>
-                    <div className="body-text">{message.content}</div>
-                    {message.sources.length > 0 && (
+                  <div key={message.id} className={`message-row ${message.role}`}>
+                    <div className="message-avatar">
+                      {message.role === "assistant" ? (
+                        <ChatBotAvatar size={34} />
+                      ) : (
+                        <UserAvatar size={34} label={account?.displayName || account?.username || "You"} />
+                      )}
+                    </div>
+
+                    <div className={`bubble ${message.role}`}>
+                      <div className="bubble-header">
+                        <span className="bubble-author">
+                          {message.role === "assistant" ? "Librarian" : account?.displayName || "You"}
+                        </span>
+                        <span className="bubble-time">{localTime(message.created_at)}</span>
+                        {message.role === "assistant" && (
+                          <button
+                            type="button"
+                            className="msg-copy-btn"
+                            onClick={() => copyMessageText(message.id, message.content)}
+                            aria-label="Copy response"
+                          >
+                            {copiedId === message.id ? "Copied! ✨" : "Copy"}
+                          </button>
+                        )}
+                      </div>
+
+                      {message.role === "assistant" ? (
+                        <Markdown content={message.content} />
+                      ) : (
+                        <div className="body-text">{message.content}</div>
+                      )}
+
+                      {message.sources.length > 0 && (
+                        <div className="sources">
+                          <span className="sources-label">📚 Sources:</span>
+                          {message.sources.map((source) => (
+                            <span key={source} className="chip source-chip">
+                              {source}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ),
+              )}
+
+              {streaming && (
+                <div className="message-row assistant">
+                  <div className="message-avatar">
+                    <ChatBotAvatar size={34} />
+                  </div>
+                  <div className="bubble assistant">
+                    <div className="bubble-header">
+                      <span className="bubble-author">Librarian</span>
+                      <span className="bubble-time">typing...</span>
+                    </div>
+                    <Markdown content={streaming} />
+                    {pendingSources.length > 0 && (
                       <div className="sources">
-                        {message.sources.map((source) => (
-                          <span key={source} className="chip">
+                        <span className="sources-label">📚 Sources:</span>
+                        {pendingSources.map((source) => (
+                          <span key={source} className="chip source-chip">
                             {source}
                           </span>
                         ))}
                       </div>
                     )}
                   </div>
-                ),
-              )}
-
-              {streaming && (
-                <div className="bubble assistant">
-                  <div className="body-text">{streaming}</div>
-                  {pendingSources.length > 0 && (
-                    <div className="sources">
-                      {pendingSources.map((source) => (
-                        <span key={source} className="chip">
-                          {source}
-                        </span>
-                      ))}
-                    </div>
-                  )}
                 </div>
               )}
 
               {busy && !streaming && (
-                <div className="bubble assistant thinking">
-                  <Spinner label={status ?? "Thinking"} />
+                <div className="message-row assistant">
+                  <div className="message-avatar">
+                    <ChatBotAvatar size={34} />
+                  </div>
+                  <div className="bubble assistant thinking">
+                    <div className="bubble-header">
+                      <span className="bubble-author">Librarian</span>
+                    </div>
+                    <TypingIndicator label={status ?? "Consulting notes..."} />
+                  </div>
                 </div>
               )}
 
@@ -310,7 +419,7 @@ export function Chat() {
               <textarea
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                placeholder="Ask your vault..."
+                placeholder="Ask your vault anything... (Enter to send, Shift+Enter for newline)"
                 rows={2}
                 aria-label="Message"
                 onKeyDown={(event) => {
@@ -321,17 +430,17 @@ export function Chat() {
                 }}
               />
               {busy ? (
-                <button className="quiet" onClick={() => abort.current?.abort()} type="button">
-                  Stop
+                <button className="quiet stop-btn bouncy-btn" onClick={() => abort.current?.abort()} type="button">
+                  ⏹ Stop
                 </button>
               ) : (
                 <button
-                  className="primary"
+                  className="primary send-btn bouncy-btn"
                   onClick={() => void send()}
                   disabled={!draft.trim()}
                   type="button"
                 >
-                  Send
+                  <span>Send 🚀</span>
                 </button>
               )}
             </div>

@@ -3,6 +3,7 @@ import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-do
 import { CortexApi, clearConnection, loadConnection, type Connection } from "./lib/api";
 import { ApiContext, useApi } from "./lib/useApi";
 import { useSync } from "./lib/useSync";
+import { CortexMascot } from "./components/Illustrations";
 import { SignIn } from "./screens/SignIn";
 import { Capture } from "./screens/Capture";
 import { Vault } from "./screens/Vault";
@@ -17,11 +18,6 @@ export default function App() {
 
   /**
    * Forget the session and go back to the sign-in screen.
-   *
-   * Called both by signing out on purpose and by any request coming back 401 -
-   * a session can end while the app is open, and an app that keeps rendering
-   * its shell around failing requests is worse than one that asks you to sign
-   * in again.
    */
   const disconnect = useCallback(() => {
     clearConnection();
@@ -57,8 +53,7 @@ export default function App() {
 }
 
 /**
- * Inside the router, so the nav can show how many captures are still waiting
- * to file. A queue you cannot see is a queue you cannot trust.
+ * Main application shell with responsive desktop sidebar and mobile bottom navigation.
  */
 function Shell() {
   const { api } = useApi();
@@ -66,49 +61,75 @@ function Shell() {
 
   return (
     <div className="app">
-          <nav className="nav">
-            <div className="brand">Cortex</div>
-            <NavLink to="/capture">
-              <PenIcon />
-              <span>Capture</span>
-              {pendingCount > 0 && (
-                <span className="badge" aria-label={`${pendingCount} waiting to file`}>
-                  {pendingCount}
-                </span>
-              )}
-            </NavLink>
-            <NavLink to="/vault">
-              <SearchIcon />
-              <span>Vault</span>
-            </NavLink>
-            <NavLink to="/create">
-              <SparkIcon />
-              <span>Create</span>
-            </NavLink>
-            <NavLink to="/chat">
-              <ChatIcon />
-              <span>Chat</span>
-            </NavLink>
-            <NavLink to="/settings">
-              <GearIcon />
-              <span>Settings</span>
-            </NavLink>
-          </nav>
+      <header className="mobile-header">
+        <div className="brand mobile-brand">
+          <CortexMascot size={28} />
+          <span className="brand-text">Cortex</span>
+        </div>
+        {pendingCount > 0 && (
+          <NavLink to="/pending" className="mobile-pending-badge">
+            <span className="badge-pulse" />
+            <span>{pendingCount} offline</span>
+          </NavLink>
+        )}
+      </header>
 
-          <main className="main">
-            <Routes>
-              <Route path="/" element={<Navigate to="/capture" replace />} />
-              <Route path="/capture" element={<Capture />} />
-              <Route path="/vault" element={<Vault />} />
-              <Route path="/vault/:id" element={<RecordDetail />} />
-              <Route path="/create" element={<Create />} />
-              <Route path="/chat" element={<Chat />} />
-              <Route path="/chat/:id" element={<Chat />} />
-              <Route path="/pending" element={<Pending />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="*" element={<Navigate to="/capture" replace />} />
-            </Routes>
-          </main>
+      <nav className="nav" aria-label="Main Navigation">
+        <div className="brand desktop-brand">
+          <div className="brand-logo-wrap">
+            <CortexMascot size={36} />
+          </div>
+          <div className="brand-info">
+            <span className="brand-text">Cortex</span>
+            <span className="brand-tagline">AI Vault</span>
+          </div>
+        </div>
+
+        <NavLink to="/capture" className="nav-link">
+          <PenIcon />
+          <span>Capture</span>
+          {pendingCount > 0 && (
+            <span className="badge" aria-label={`${pendingCount} waiting to file`}>
+              {pendingCount}
+            </span>
+          )}
+        </NavLink>
+
+        <NavLink to="/vault" className="nav-link">
+          <SearchIcon />
+          <span>Vault</span>
+        </NavLink>
+
+        <NavLink to="/create" className="nav-link">
+          <SparkIcon />
+          <span>Create</span>
+        </NavLink>
+
+        <NavLink to="/chat" className="nav-link">
+          <ChatIcon />
+          <span>Chat</span>
+        </NavLink>
+
+        <NavLink to="/settings" className="nav-link">
+          <GearIcon />
+          <span>Settings</span>
+        </NavLink>
+      </nav>
+
+      <main className="main">
+        <Routes>
+          <Route path="/" element={<Navigate to="/capture" replace />} />
+          <Route path="/capture" element={<Capture />} />
+          <Route path="/vault" element={<Vault />} />
+          <Route path="/vault/:id" element={<RecordDetail />} />
+          <Route path="/create" element={<Create />} />
+          <Route path="/chat" element={<Chat />} />
+          <Route path="/chat/:id" element={<Chat />} />
+          <Route path="/pending" element={<Pending />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="*" element={<Navigate to="/capture" replace />} />
+        </Routes>
+      </main>
     </div>
   );
 }
@@ -117,7 +138,7 @@ const iconProps = {
   viewBox: "0 0 24 24",
   fill: "none",
   stroke: "currentColor",
-  strokeWidth: 1.8,
+  strokeWidth: 2,
   strokeLinecap: "round" as const,
   strokeLinejoin: "round" as const,
   "aria-hidden": true,

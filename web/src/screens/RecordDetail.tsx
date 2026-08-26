@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { errorMessage, type Project, type VaultRecord } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { Notice, ProjectPicker, Spinner } from "../components/ui";
+import { Markdown } from "../components/Markdown";
 import { localTime } from "../lib/time";
 
 export function RecordDetail() {
@@ -21,7 +22,6 @@ export function RecordDetail() {
 
   useEffect(() => {
     let cancelled = false;
-    setError(null);
     api.record(recordId).then(
       (loaded) => {
         if (cancelled) return;
@@ -73,7 +73,7 @@ export function RecordDetail() {
   if (error && !record) {
     return (
       <div className="stack">
-        <button className="quiet" onClick={() => navigate("/vault")} type="button">
+        <button className="quiet bouncy-btn" onClick={() => navigate("/vault")} type="button">
           &larr; Back to vault
         </button>
         <Notice kind="error">{error}</Notice>
@@ -81,18 +81,18 @@ export function RecordDetail() {
     );
   }
 
-  if (!record) return <Spinner label="Loading..." />;
+  if (!record) return <Spinner label="Loading note..." />;
 
   return (
     <div className="stack">
-      <button className="quiet" onClick={() => navigate(-1)} type="button" style={{ alignSelf: "start" }}>
+      <button className="quiet bouncy-btn" onClick={() => navigate(-1)} type="button" style={{ alignSelf: "start" }}>
         &larr; Back
       </button>
 
       {error && <Notice kind="error">{error}</Notice>}
 
       {editing ? (
-        <div className="stack">
+        <div className="card stack">
           <div>
             <label htmlFor="title">Title</label>
             <input
@@ -135,7 +135,7 @@ export function RecordDetail() {
           </div>
 
           <div>
-            <label htmlFor="body">Note</label>
+            <label htmlFor="body">Note (Markdown supported)</label>
             <textarea
               id="body"
               value={draft.body ?? ""}
@@ -145,10 +145,11 @@ export function RecordDetail() {
           </div>
 
           <div className="row">
-            <button className="primary" onClick={() => void save()} disabled={busy} type="button">
+            <button className="primary bouncy-btn" onClick={() => void save()} disabled={busy} type="button">
               {busy ? <Spinner label="Saving..." /> : "Save changes"}
             </button>
             <button
+              className="bouncy-btn"
               onClick={() => {
                 setDraft(record);
                 setEditing(false);
@@ -162,37 +163,45 @@ export function RecordDetail() {
         </div>
       ) : (
         <>
-          <div>
+          <div className="record-header">
             <h1>{record.title}</h1>
-            <div className="meta" style={{ color: "var(--faint)", fontSize: "0.83rem", marginTop: 6 }}>
-              {record.project}
-              {record.category && ` | ${record.category}`}
-              {record.subcategory && ` / ${record.subcategory}`}
-              {` | ${localTime(record.created_at)}`}
-              {record.updated_at !== record.created_at && ` | edited ${localTime(record.updated_at)}`}
+            <div className="meta record-meta">
+              <span className="chip project-chip">📁 {record.project}</span>
+              {record.category && <span className="chip category-chip">🏷️ {record.category}</span>}
+              {record.subcategory && <span className="chip">📂 {record.subcategory}</span>}
+              <span className="dot">•</span>
+              <span>Created {localTime(record.created_at)}</span>
+              {record.updated_at !== record.created_at && (
+                <>
+                  <span className="dot">•</span>
+                  <span>Edited {localTime(record.updated_at)}</span>
+                </>
+              )}
             </div>
           </div>
 
-          <div className="card body-text">{record.body}</div>
+          <div className="card record-body-card">
+            <Markdown content={record.body} />
+          </div>
 
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <button onClick={() => setEditing(true)} type="button">
-              Edit
+            <button className="bouncy-btn primary" onClick={() => setEditing(true)} type="button">
+              ✏️ Edit Note
             </button>
 
             {confirmingDelete ? (
               <div className="row">
                 <span style={{ fontSize: "0.88rem", color: "var(--muted)" }}>Delete permanently?</span>
-                <button className="danger" onClick={() => void remove()} disabled={busy} type="button">
-                  {busy ? <Spinner /> : "Delete"}
+                <button className="danger bouncy-btn" onClick={() => void remove()} disabled={busy} type="button">
+                  {busy ? <Spinner /> : "Yes, Delete"}
                 </button>
-                <button className="quiet" onClick={() => setConfirmingDelete(false)} type="button">
+                <button className="quiet bouncy-btn" onClick={() => setConfirmingDelete(false)} type="button">
                   Keep
                 </button>
               </div>
             ) : (
-              <button className="quiet" onClick={() => setConfirmingDelete(true)} type="button">
-                Delete
+              <button className="quiet danger bouncy-btn" onClick={() => setConfirmingDelete(true)} type="button">
+                🗑️ Delete
               </button>
             )}
           </div>

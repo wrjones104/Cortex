@@ -13,19 +13,10 @@ import {
   type Connection,
 } from "../lib/api";
 import { Notice, Spinner } from "../components/ui";
+import { SignInHero } from "../components/Illustrations";
 
 /**
  * Getting in.
- *
- * This used to ask for a server address and a 43-character token, both typed
- * by hand. The address is now found rather than asked for - Cortex serves this
- * app itself, so the page's own origin is almost always the answer - and the
- * token is replaced by a password, which is a thing a person can type on a
- * phone without a password manager and a lot of patience.
- *
- * The address field is still here, behind a disclosure, for the two cases that
- * need it: development, where the client is on a different port from the API,
- * and anyone pointing one client at a Cortex somewhere else.
  */
 export function SignIn({ onConnected }: { onConnected: (connection: Connection) => void }) {
   const [baseUrl, setBaseUrl] = useState("");
@@ -41,7 +32,6 @@ export function SignIn({ onConnected }: { onConnected: (connection: Connection) 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Find the server, then ask it whether anybody has an account here yet.
   useEffect(() => {
     let cancelled = false;
 
@@ -107,8 +97,6 @@ export function SignIn({ onConnected }: { onConnected: (connection: Connection) 
       onConnected(connection);
     } catch (cause) {
       setError(errorMessage(cause));
-      // Someone else claimed it, or an account appeared while this screen was
-      // open. Re-read the state rather than leaving the wrong form up.
       if (isApiError(cause) && cause.status === 409) void recheck(baseUrl);
     } finally {
       setBusy(false);
@@ -118,8 +106,9 @@ export function SignIn({ onConnected }: { onConnected: (connection: Connection) 
   if (looking) {
     return (
       <div className="center-screen">
-        <div className="card stack">
-          <Spinner label="Looking for your Cortex..." />
+        <div className="card stack" style={{ alignItems: "center", textAlign: "center", padding: 32 }}>
+          <SignInHero size={80} />
+          <Spinner label="Connecting to your Cortex..." />
         </div>
       </div>
     );
@@ -129,15 +118,16 @@ export function SignIn({ onConnected }: { onConnected: (connection: Connection) 
 
   return (
     <div className="center-screen">
-      <form className="card stack" onSubmit={submit}>
-        <div>
-          <h1>{creating ? "Set up your Cortex" : "Sign in"}</h1>
+      <form className="card stack signin-card" onSubmit={submit}>
+        <div style={{ textAlign: "center" }}>
+          <SignInHero size={88} />
+          <h1>{creating ? "Welcome to Cortex! ✨" : "Welcome Back! 👋"}</h1>
           <p style={{ color: "var(--muted)", fontSize: "0.92rem", margin: "6px 0 0" }}>
             {creating
               ? state?.adopting_existing_vault
-                ? "This Cortex already holds notes. The account you make now becomes its owner, and those notes stay exactly where they are."
-                : "Pick a username and a password. This first account is the owner and can add others later."
-              : "Your notes, your models, your section of the vault."}
+                ? "This Cortex already holds notes. The account you make now becomes its owner."
+                : "Create your owner account to start organizing notes and chatting with your Librarian."
+              : "Your notes, your local models, your personal digital brain."}
           </p>
         </div>
 
@@ -198,9 +188,7 @@ export function SignIn({ onConnected }: { onConnected: (connection: Connection) 
               autoComplete="off"
             />
             <p className="hint" style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
-              Asked for only this once. There are already notes here, so claiming
-              them needs proof you are at the machine serving them. Run{" "}
-              <code>cortex token</code> there.
+              Run <code>cortex token</code> on the machine hosting Cortex to claim this vault.
             </p>
           </div>
         )}
@@ -208,21 +196,22 @@ export function SignIn({ onConnected }: { onConnected: (connection: Connection) 
         {error && <Notice kind="error">{error}</Notice>}
 
         <button
-          className="primary"
+          className="primary bouncy-btn send-btn"
           type="submit"
           disabled={busy || !username.trim() || !password}
+          style={{ width: "100%", justifyContent: "center" }}
         >
           {busy ? (
-            <Spinner label={creating ? "Creating..." : "Signing in..."} />
+            <Spinner label={creating ? "Setting up..." : "Signing in..."} />
           ) : creating ? (
-            "Create account"
+            "Create Account & Start 🚀"
           ) : (
-            "Sign in"
+            "Sign In & Open Vault 🚀"
           )}
         </button>
 
         {showAddress ? (
-          <div>
+          <div style={{ marginTop: 8 }}>
             <label htmlFor="baseUrl">Server address</label>
             <div className="row" style={{ gap: 8 }}>
               <input
@@ -233,7 +222,7 @@ export function SignIn({ onConnected }: { onConnected: (connection: Connection) 
                 placeholder="http://127.0.0.1:8765"
                 autoComplete="url"
               />
-              <button type="button" onClick={() => void recheck(baseUrl.trim())} disabled={busy}>
+              <button className="bouncy-btn" type="button" onClick={() => void recheck(baseUrl.trim())} disabled={busy}>
                 Check
               </button>
             </div>
@@ -248,9 +237,10 @@ export function SignIn({ onConnected }: { onConnected: (connection: Connection) 
               border: "none",
               padding: 0,
               color: "var(--muted)",
-              fontSize: "0.85rem",
+              fontSize: "0.82rem",
               cursor: "pointer",
-              textAlign: "left",
+              textAlign: "center",
+              marginTop: 4,
             }}
           >
             Connected to {baseUrl}. Change server

@@ -2,14 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, type Generation, type Project } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { Empty, Notice, ProjectPicker, Spinner } from "../components/ui";
+import { CreateHero } from "../components/Illustrations";
+import { Markdown } from "../components/Markdown";
 import { localTime } from "../lib/time";
 
 /**
  * Brainstorming, and taking only the parts you liked.
- *
- * The prototype banked a whole generation as one record. Here every idea is a
- * separate checkbox and a separate record, and nothing is filed until you say
- * which.
  */
 export function Create() {
   const { api } = useApi();
@@ -65,7 +63,7 @@ export function Create() {
     setResult(null);
     setPreview("");
     setProduced(0);
-    setStatus("Starting");
+    setStatus("Brainstorming");
 
     const controller = new AbortController();
     abort.current = controller;
@@ -82,8 +80,6 @@ export function Create() {
           onStatus: setStatus,
           onToken: (text) => {
             setProduced((n) => n + text.length);
-            // In options mode the tokens are JSON, so show the character count
-            // rather than the text. In freeform they are prose worth reading.
             if (mode === "freeform") setPreview((current) => current + text);
           },
         },
@@ -172,89 +168,91 @@ export function Create() {
     <>
       <div className="page-head">
         <div>
-          <h1>Create</h1>
-          <p>Brainstorm, then keep only what you liked.</p>
+          <h1>Create 💡</h1>
+          <p>Spark new ideas and brainstorms, then file only the ones you love.</p>
         </div>
       </div>
 
       <div className="stack">
-        <textarea
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="What do you want to explore?"
-          disabled={busy}
-          aria-label="Prompt"
-          style={{ minHeight: 100 }}
-        />
+        <div className="card stack">
+          <textarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="What would you like to brainstorm? e.g., '10 game mechanics for a space explorer', 'Angles for an essay on memory'..."
+            disabled={busy}
+            aria-label="Prompt"
+            style={{ minHeight: 110 }}
+          />
 
-        <div className="row" style={{ gap: 14 }}>
-          <div className="seg" role="group" aria-label="Mode">
-            <button
-              className={mode === "options" ? "on" : ""}
-              onClick={() => setMode("options")}
-              disabled={busy}
-              type="button"
-            >
-              Alternatives
-            </button>
-            <button
-              className={mode === "freeform" ? "on" : ""}
-              onClick={() => setMode("freeform")}
-              disabled={busy}
-              type="button"
-            >
-              Ramble
-            </button>
+          <div className="row" style={{ gap: 14, alignItems: "center" }}>
+            <div className="seg" role="group" aria-label="Mode">
+              <button
+                className={mode === "options" ? "on bouncy-btn" : "bouncy-btn"}
+                onClick={() => setMode("options")}
+                disabled={busy}
+                type="button"
+              >
+                ✨ Distinct Options
+              </button>
+              <button
+                className={mode === "freeform" ? "on bouncy-btn" : "bouncy-btn"}
+                onClick={() => setMode("freeform")}
+                disabled={busy}
+                type="button"
+              >
+                📝 Freeform Ramble
+              </button>
+            </div>
+
+            {mode === "options" && (
+              <label className="toggle" style={{ gap: 6 }}>
+                <span>Count:</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={count}
+                  onChange={(event) => setCount(Number(event.target.value))}
+                  disabled={busy}
+                  style={{ width: 62 }}
+                  aria-label="How many alternatives"
+                />
+              </label>
+            )}
           </div>
 
-          {mode === "options" && (
-            <label className="toggle" style={{ gap: 6 }}>
-              How many
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={count}
-                onChange={(event) => setCount(Number(event.target.value))}
-                disabled={busy}
-                style={{ width: 62 }}
-                aria-label="How many alternatives"
-              />
-            </label>
-          )}
-        </div>
+          <div>
+            <label htmlFor="create-project">Ground In Project</label>
+            <ProjectPicker value={project} onChange={setProject} projects={projects.map((p) => p.name)} />
+          </div>
 
-        <div>
-          <label htmlFor="create-project">Project</label>
-          <ProjectPicker value={project} onChange={setProject} projects={projects.map((p) => p.name)} />
-        </div>
-
-        <div className="row">
-          <button
-            className="primary"
-            onClick={() => void run()}
-            disabled={busy || !prompt.trim()}
-            type="button"
-          >
-            {busy ? <Spinner label={status ?? "Working"} /> : "Generate"}
-          </button>
-          {busy && (
-            <>
-              <button className="quiet" onClick={() => abort.current?.abort()} type="button">
-                Stop
-              </button>
-              {produced > 0 && (
-                <span style={{ fontSize: "0.82rem", color: "var(--faint)" }}>
-                  {produced.toLocaleString()} characters
-                </span>
-              )}
-            </>
-          )}
+          <div className="row">
+            <button
+              className="primary bouncy-btn send-btn"
+              onClick={() => void run()}
+              disabled={busy || !prompt.trim()}
+              type="button"
+            >
+              {busy ? <Spinner label={status ?? "Brainstorming..."} /> : "Generate Ideas 🚀"}
+            </button>
+            {busy && (
+              <>
+                <button className="quiet bouncy-btn" onClick={() => abort.current?.abort()} type="button">
+                  Stop
+                </button>
+                {produced > 0 && (
+                  <span style={{ fontSize: "0.82rem", color: "var(--faint)" }}>
+                    {produced.toLocaleString()} characters generated
+                  </span>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         {busy && mode === "freeform" && preview && (
-          <div className="card body-text" style={{ maxHeight: 260, overflowY: "auto" }}>
-            {preview}
+          <div className="card" style={{ maxHeight: 280, overflowY: "auto" }}>
+            <Markdown content={preview} />
           </div>
         )}
 
@@ -264,23 +262,25 @@ export function Create() {
         {current && (
           <section className="stack">
             <div className="row" style={{ justifyContent: "space-between" }}>
-              <h2>{current.ideas.length > 0 ? "Pick what to keep" : "Your ramble"}</h2>
+              <h2>{current.ideas.length > 0 ? "🎯 Pick ideas to file into your vault" : "📜 Your ramble"}</h2>
               {current.mode === "freeform" && (
-                <button onClick={() => void runSplit()} disabled={splitting} type="button">
-                  {splitting ? <Spinner label="Splitting..." /> : "Split into ideas"}
+                <button className="bouncy-btn" onClick={() => void runSplit()} disabled={splitting} type="button">
+                  {splitting ? <Spinner label="Splitting..." /> : "✂️ Split into ideas"}
                 </button>
               )}
             </div>
 
             {current.ideas.length === 0 && current.output && (
-              <div className="card body-text">{current.output}</div>
+              <div className="card">
+                <Markdown content={current.output} />
+              </div>
             )}
 
             <div className="list">
               {current.ideas.map((idea) => (
                 <label
                   key={idea.ordinal}
-                  className={`item idea ${idea.banked ? "banked" : ""} ${
+                  className={`item idea bouncy-card ${idea.banked ? "banked" : ""} ${
                     chosen.has(idea.ordinal) ? "picked" : ""
                   }`}
                 >
@@ -291,15 +291,17 @@ export function Create() {
                     disabled={idea.banked || banking}
                     aria-label={`Keep ${idea.title}`}
                   />
-                  <div style={{ minWidth: 0 }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
                     <h3>
                       {idea.title}
-                      {idea.banked && <span className="chip" style={{ marginLeft: 8 }}>filed</span>}
+                      {idea.banked && <span className="chip summary-chip" style={{ marginLeft: 8 }}>✅ filed</span>}
                     </h3>
                     {idea.pitch && <div className="pitch">{idea.pitch}</div>}
                     <details>
-                      <summary>Detail</summary>
-                      <div className="body-text">{idea.detail}</div>
+                      <summary>Read full details</summary>
+                      <div className="idea-detail-body">
+                        <Markdown content={idea.detail} />
+                      </div>
                     </details>
                   </div>
                 </label>
@@ -307,7 +309,7 @@ export function Create() {
             </div>
 
             {takeable.length > 0 && (
-              <div className="row" style={{ justifyContent: "space-between" }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
                 <label className="toggle">
                   <input
                     type="checkbox"
@@ -315,18 +317,18 @@ export function Create() {
                     onChange={(event) => setVerbatim(!event.target.checked)}
                     disabled={banking}
                   />
-                  Let the Librarian tidy it first
+                  <span>Let the Librarian tidy notes first</span>
                 </label>
                 <button
-                  className="primary"
+                  className="primary bouncy-btn"
                   onClick={() => void bankChosen()}
                   disabled={banking || chosen.size === 0}
                   type="button"
                 >
                   {banking ? (
-                    <Spinner label="Filing..." />
+                    <Spinner label="Filing to vault..." />
                   ) : (
-                    `Keep ${chosen.size || ""} ${chosen.size === 1 ? "idea" : "ideas"}`.trim()
+                    `Save ${chosen.size || ""} ${chosen.size === 1 ? "Idea" : "Ideas"} to Vault ✨`.trim()
                   )}
                 </button>
               </div>
@@ -336,19 +338,19 @@ export function Create() {
 
         {history.length > 0 && (
           <section className="stack">
-            <h2>Earlier</h2>
+            <h2>Earlier Brainstorms</h2>
             <div className="list">
               {history.map((generation) => (
                 <div key={generation.id} className="item thread-item">
                   <button className="thread-open" onClick={() => void showById(generation.id)}>
                     <h3 className="truncate">{generation.prompt}</h3>
                     <div className="meta">
-                      <span>{generation.mode === "options" ? "alternatives" : "ramble"}</span>
-                      <span className="dot">|</span>
+                      <span className="chip">{generation.mode === "options" ? "alternatives" : "ramble"}</span>
+                      <span className="dot">•</span>
                       <span>{generation.ideas.length} ideas</span>
-                      <span className="dot">|</span>
+                      <span className="dot">•</span>
                       <span>{generation.ideas.filter((i) => i.banked).length} kept</span>
-                      <span className="dot">|</span>
+                      <span className="dot">•</span>
                       <span>{localTime(generation.created_at)}</span>
                     </div>
                   </button>
@@ -367,7 +369,11 @@ export function Create() {
         )}
 
         {!current && history.length === 0 && !busy && (
-          <Empty title="Nothing yet" hint="Ask for a few alternatives and keep the good one." />
+          <Empty
+            title="Ready to brainstorm?"
+            hint="Enter a topic above, generate options, and keep the gems."
+            illustration={<CreateHero size={88} />}
+          />
         )}
       </div>
     </>

@@ -4,14 +4,11 @@ import { useApi } from "../lib/useApi";
 import { useSync } from "../lib/useSync";
 import { pending, remove, type QueuedCapture } from "../lib/queue";
 import { Empty, Notice, Spinner } from "../components/ui";
+import { PendingHero } from "../components/Illustrations";
 import { localTime } from "../lib/time";
 
 /**
  * What is waiting to file.
- *
- * A queue you cannot see is a queue you cannot trust. Everything captured
- * offline is listed here with why it has not landed yet, and can be retried
- * or discarded deliberately.
  */
 export function Pending() {
   const { api } = useApi();
@@ -50,23 +47,31 @@ export function Pending() {
     <>
       <div className="page-head">
         <div>
-          <h1>Waiting to file</h1>
-          <p>Captured on this device, not yet in the vault.</p>
+          <h1>Waiting to File 📦</h1>
+          <p>Captured locally on this device, queued for vault sync.</p>
         </div>
       </div>
 
       <div className="stack">
-        {!online && <Notice kind="warn">Offline. These will send when you are back.</Notice>}
+        {!online && (
+          <Notice kind="warn">
+            Device is offline. Notes are safely saved locally and will auto-sync when connected.
+          </Notice>
+        )}
         {result && <Notice kind="info">{result}</Notice>}
 
-        {items === null && <Spinner label="Loading..." />}
+        {items === null && <Spinner label="Checking offline queue..." />}
 
         {items?.length === 0 && (
           <>
-            <Empty title="Nothing waiting" hint="Everything you captured has been filed." />
+            <Empty
+              title="All caught up!"
+              hint="Every captured note has been successfully filed in your vault."
+              illustration={<PendingHero size={88} />}
+            />
             <div className="row" style={{ justifyContent: "center" }}>
-              <button onClick={() => navigate("/capture")} type="button">
-                Back to capture
+              <button className="primary bouncy-btn" onClick={() => navigate("/capture")} type="button">
+                Capture a Note ✨
               </button>
             </div>
           </>
@@ -74,31 +79,34 @@ export function Pending() {
 
         {items && items.length > 0 && (
           <>
-            <div className="row">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <span>
+                <strong>{items.length}</strong> {items.length === 1 ? "note" : "notes"} in local queue
+              </span>
               <button
-                className="primary"
+                className="primary bouncy-btn send-btn"
                 onClick={() => void syncNow()}
                 disabled={syncing || !online}
                 type="button"
               >
-                {syncing ? <Spinner label="Sending..." /> : "Send them now"}
+                {syncing ? <Spinner label="Sending..." /> : "Sync All Now 🚀"}
               </button>
             </div>
 
             <div className="list">
               {items.map((item) => (
-                <div key={item.id} className="item thread-item">
+                <div key={item.id} className="item thread-item bouncy-card">
                   <div className="thread-open" style={{ cursor: "default" }}>
                     <div className="body-text" style={{ fontSize: "0.94rem" }}>
                       {item.text.length > 240 ? `${item.text.slice(0, 240)}...` : item.text}
                     </div>
                     <div className="meta">
-                      <span>{item.project ?? "unfiled"}</span>
-                      <span className="dot">|</span>
+                      <span className="chip project-chip">{item.project ? `📁 ${item.project}` : "unfiled"}</span>
+                      <span className="dot">•</span>
                       <span>{localTime(item.created_at)}</span>
                       {item.attempts > 0 && (
                         <>
-                          <span className="dot">|</span>
+                          <span className="dot">•</span>
                           <span>
                             {item.attempts} attempt{item.attempts === 1 ? "" : "s"}
                           </span>
@@ -106,13 +114,13 @@ export function Pending() {
                       )}
                     </div>
                     {item.last_error && (
-                      <div className="pitch" style={{ color: "var(--warn)" }}>
-                        {item.last_error}
+                      <div className="pitch" style={{ color: "var(--warn)", marginTop: 4 }}>
+                        ⚠️ {item.last_error}
                       </div>
                     )}
                   </div>
                   <button
-                    className="quiet thread-delete"
+                    className="quiet thread-delete bouncy-btn"
                     aria-label="Discard this note"
                     onClick={() => void discard(item.id)}
                     type="button"

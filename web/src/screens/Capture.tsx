@@ -6,6 +6,7 @@ import { useSync } from "../lib/useSync";
 import { enqueue } from "../lib/queue";
 import { isOnline } from "../lib/sync";
 import { Notice, ProjectPicker, Spinner } from "../components/ui";
+import { CaptureHero } from "../components/Illustrations";
 
 const DRAFT_KEY = "cortex.draft";
 
@@ -53,11 +54,6 @@ export function Capture() {
 
   // Arriving from Android's share sheet: the manifest routes the share here
   // with the shared text as query parameters.
-  //
-  // The guard is load-bearing. Appending to state inside an effect means any
-  // re-run before the params clear appends a second copy — which React's
-  // development double-invocation does every single time. Marking the share
-  // consumed as it is read makes it happen once, whatever re-runs.
   useEffect(() => {
     const shared = [params.get("title"), params.get("text"), params.get("url")]
       .filter((part) => part && part.trim())
@@ -123,8 +119,6 @@ export function Capture() {
       if (isApiError(cause) && cause.status === 409) {
         setDuplicateOf(cause.message);
       } else if (isApiError(cause) && (cause.status === 0 || cause.status >= 500)) {
-        // Unreachable or broken. Do not make someone retype a note, or wait
-        // for the network, because the server picked this moment to fall over.
         await queueIt("Cortex did not answer.");
       } else {
         setError(errorMessage(cause));
@@ -139,84 +133,86 @@ export function Capture() {
     <>
       <div className="page-head">
         <div>
-          <h1>Capture</h1>
-          <p>Drop a thought in. The Librarian files it.</p>
+          <h1>Capture ⚡</h1>
+          <p>Drop a thought, task, link or note. The Librarian files it.</p>
         </div>
       </div>
 
       <div className="stack">
         {!online && (
           <Notice kind="warn">
-            Offline. Anything you capture stays on this device and files itself when
-            Cortex is reachable.
+            Offline mode active. Anything you capture stays safely on this device and files itself when Cortex reconnects.
           </Notice>
         )}
 
         {pendingCount > 0 && (
           <div className="notice info row" style={{ justifyContent: "space-between" }}>
             <span>
-              {pendingCount} note{pendingCount === 1 ? "" : "s"} waiting to file
+              📦 {pendingCount} note{pendingCount === 1 ? "" : "s"} waiting to file
             </span>
             <div className="row">
-              <button className="quiet" onClick={() => navigate("/pending")} type="button">
-                Show
+              <button className="quiet bouncy-btn" onClick={() => navigate("/pending")} type="button">
+                View queue
               </button>
               <button
-                className="quiet"
+                className="quiet bouncy-btn"
                 onClick={() => void sync()}
                 disabled={syncing || !online}
                 type="button"
               >
-                {syncing ? <Spinner label="Syncing" /> : "Sync now"}
+                {syncing ? <Spinner label="Syncing" /> : "Sync now 🚀"}
               </button>
             </div>
           </div>
         )}
 
-        <textarea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          placeholder="What are you thinking?"
-          disabled={busy}
-          aria-label="Note"
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-              event.preventDefault();
-              void save();
-            }
-          }}
-        />
+        <div className="capture-card card stack">
+          <textarea
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="What's on your mind? Drop ideas, research snippets, reminders..."
+            disabled={busy}
+            aria-label="Note"
+            className="capture-textarea"
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void save();
+              }
+            }}
+          />
 
-        <div>
-          <label htmlFor="project">Project</label>
-          <ProjectPicker value={project} onChange={setProject} projects={projects} />
-        </div>
+          <div>
+            <label htmlFor="project">Project / Section</label>
+            <ProjectPicker value={project} onChange={setProject} projects={projects} />
+          </div>
 
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={verbatim}
-              onChange={(event) => setVerbatim(event.target.checked)}
-              disabled={busy}
-            />
-            Keep my words exactly
-          </label>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={verbatim}
+                onChange={(event) => setVerbatim(event.target.checked)}
+                disabled={busy}
+              />
+              <span>Keep my words exactly (verbatim)</span>
+            </label>
 
-          <div className="row">
-            {busy && (
-              <button className="quiet" onClick={() => abort.current?.abort()} type="button">
-                Cancel
+            <div className="row">
+              {busy && (
+                <button className="quiet bouncy-btn" onClick={() => abort.current?.abort()} type="button">
+                  Cancel
+                </button>
+              )}
+              <button
+                className="primary bouncy-btn send-btn"
+                onClick={() => void save()}
+                disabled={busy || !text.trim()}
+                type="button"
+              >
+                {busy ? <Spinner label={stage === "starting" ? "Filing..." : stage!} /> : "Save Note ✨"}
               </button>
-            )}
-            <button
-              className="primary"
-              onClick={() => void save()}
-              disabled={busy || !text.trim()}
-              type="button"
-            >
-              {busy ? <Spinner label={stage === "starting" ? "Saving..." : stage!} /> : "Save"}
-            </button>
+            </div>
           </div>
         </div>
 
@@ -228,7 +224,7 @@ export function Capture() {
             <div className="stack" style={{ gap: 8 }}>
               <span>{duplicateOf}</span>
               <div>
-                <button type="button" onClick={() => void save(true)}>
+                <button className="bouncy-btn" type="button" onClick={() => void save(true)}>
                   Save it anyway
                 </button>
               </div>
@@ -240,7 +236,7 @@ export function Capture() {
           <Notice kind="ok">
             <div className="stack" style={{ gap: 8 }}>
               <span>
-                Filed in <strong>{saved.record.project}</strong> as{" "}
+                🎉 Filed in <strong>{saved.record.project}</strong> as{" "}
                 <strong>{saved.record.title}</strong>
                 {saved.record.category && ` (${saved.record.category})`}
               </span>
@@ -248,12 +244,21 @@ export function Capture() {
                 <span key={warning}>{warning}</span>
               ))}
               <div>
-                <button type="button" onClick={() => navigate(`/vault/${saved.record.id}`)}>
-                  Open it
+                <button className="bouncy-btn primary" type="button" onClick={() => navigate(`/vault/${saved.record.id}`)}>
+                  Open in Vault &rarr;
                 </button>
               </div>
             </div>
           </Notice>
+        )}
+
+        {!text && !saved && !queued && (
+          <div className="hero-hint-box">
+            <CaptureHero size={88} />
+            <p style={{ margin: "10px 0 0", color: "var(--muted)", fontSize: "0.88rem" }}>
+              💡 <em>Tip: Press <strong>Ctrl + Enter</strong> (or <strong>Cmd + Enter</strong>) to quickly save your note!</em>
+            </p>
+          </div>
         )}
       </div>
     </>

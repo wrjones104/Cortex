@@ -3,17 +3,17 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { errorMessage, type Project, type VaultRecord, type SearchHit } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { Empty, Notice, Spinner } from "../components/ui";
+import { VaultHero } from "../components/Illustrations";
 import { localTime } from "../lib/time";
 
 const MATCH_LABEL = {
-  both: "meaning + keyword",
-  meaning: "meaning",
-  keyword: "keyword",
+  both: "⚡ meaning + keyword",
+  meaning: "🧠 meaning",
+  keyword: "🔤 keyword",
 } as const;
 
 /**
- * Browse and search. The prototype could only filter by project, which stops
- * being usable somewhere around a hundred notes.
+ * Browse and search.
  */
 export function Vault() {
   const { api } = useApi();
@@ -45,7 +45,7 @@ export function Vault() {
     try {
       if (query.trim()) {
         const result = await api.search(query, { project: project || undefined, limit: 30 });
-        if (mine !== requestId.current) return; // a newer request won
+        if (mine !== requestId.current) return;
         setHits(result.hits);
       } else {
         const result = await api.records({ project: project || undefined, limit: 50 });
@@ -66,8 +66,6 @@ export function Vault() {
     void load();
   }, [load]);
 
-  // Debounced: searching runs two model-free queries plus one embedding call,
-  // and firing on every keystroke would queue them faster than they return.
   useEffect(() => {
     if (input === query) return;
     const timer = setTimeout(() => {
@@ -90,58 +88,69 @@ export function Vault() {
     <>
       <div className="page-head">
         <div>
-          <h1>Vault</h1>
+          <h1>Vault 📚</h1>
           <p>
-            {total > 0 && !query ? `${total} note${total === 1 ? "" : "s"}` : "Search by meaning or by keyword"}
+            {total > 0 && !query ? `${total} note${total === 1 ? "" : "s"} in your knowledge base` : "Search deeply by meaning or exact wording"}
           </p>
         </div>
       </div>
 
       <div className="stack">
-        <input
-          type="search"
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          placeholder="Search your vault..."
-          aria-label="Search"
-        />
+        <div className="vault-search-row row" style={{ gap: 10 }}>
+          <div style={{ flex: 1, position: "relative" }}>
+            <input
+              type="search"
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="🔍 Search your knowledge vault..."
+              aria-label="Search"
+              className="vault-search-input"
+            />
+          </div>
 
-        <select
-          value={project}
-          onChange={(event) => setProjectFilter(event.target.value)}
-          aria-label="Filter by project"
-        >
-          <option value="">All projects</option>
-          {projects.map((p) => (
-            <option key={p.slug} value={p.name}>
-              {p.name} ({p.record_count})
-            </option>
-          ))}
-        </select>
+          <select
+            value={project}
+            onChange={(event) => setProjectFilter(event.target.value)}
+            aria-label="Filter by project"
+            className="vault-project-filter"
+            style={{ width: "auto", minWidth: 160 }}
+          >
+            <option value="">🌐 All projects</option>
+            {projects.map((p) => (
+              <option key={p.slug} value={p.name}>
+                📁 {p.name} ({p.record_count})
+              </option>
+            ))}
+          </select>
+        </div>
 
         {error && <Notice kind="error">{error}</Notice>}
-        {loading && <Spinner label="Loading..." />}
+        {loading && <Spinner label="Consulting vault index..." />}
 
         {!loading && !error && hits !== null && (
           hits.length === 0 ? (
             <Empty
-              title="Nothing matched"
-              hint="Nothing in the vault is close to that, by meaning or by wording."
+              title="Nothing matched your search"
+              hint="Try searching for a different concept, synonym, or keyword."
+              illustration={<VaultHero size={88} />}
             />
           ) : (
             <div className="list">
               {hits.map((hit) => (
                 <button
                   key={hit.record.id}
-                  className="item"
+                  className="item hit-item bouncy-card"
                   onClick={() => navigate(`/vault/${hit.record.id}`)}
                 >
-                  <h3>{hit.record.title}</h3>
+                  <div className="hit-header">
+                    <h3>{hit.record.title}</h3>
+                    <span className={`chip ${hit.matched_by}`}>{MATCH_LABEL[hit.matched_by]}</span>
+                  </div>
                   <div className="snippet">{hit.snippet}</div>
                   <div className="meta">
-                    <span>{hit.record.project}</span>
-                    <span className="dot">|</span>
-                    <span className={`chip ${hit.matched_by}`}>{MATCH_LABEL[hit.matched_by]}</span>
+                    <span className="chip project-chip">📁 {hit.record.project}</span>
+                    <span className="dot">•</span>
+                    <span>{localTime(hit.record.updated_at)}</span>
                   </div>
                 </button>
               ))}
@@ -152,27 +161,28 @@ export function Vault() {
         {!loading && !error && hits === null && (
           records.length === 0 ? (
             <Empty
-              title={project ? `Nothing in ${project} yet` : "Your vault is empty"}
-              hint="Captured notes show up here."
+              title={project ? `No notes in ${project} yet` : "Your vault is empty"}
+              hint="Capture your first note and watch your personal library grow!"
+              illustration={<VaultHero size={88} />}
             />
           ) : (
             <div className="list">
               {records.map((record) => (
                 <button
                   key={record.id}
-                  className="item"
+                  className="item vault-record-item bouncy-card"
                   onClick={() => navigate(`/vault/${record.id}`)}
                 >
                   <h3>{record.title}</h3>
                   <div className="snippet">{record.body}</div>
                   <div className="meta">
-                    <span>{record.project}</span>
-                    <span className="dot">|</span>
+                    <span className="chip project-chip">📁 {record.project}</span>
+                    <span className="dot">•</span>
                     <span>{localTime(record.created_at)}</span>
                     {record.category && (
                       <>
-                        <span className="dot">|</span>
-                        <span>{record.category}</span>
+                        <span className="dot">•</span>
+                        <span className="chip category-chip">🏷️ {record.category}</span>
                       </>
                     )}
                   </div>

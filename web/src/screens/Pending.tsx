@@ -95,32 +95,35 @@ export function Pending() {
 
             <div className="list">
               {items.map((item) => (
-                <div key={item.id} className="item thread-item bouncy-card">
-                  <div className="thread-open" style={{ cursor: "default" }}>
-                    <div className="body-text" style={{ fontSize: "0.94rem" }}>
-                      {item.text.length > 240 ? `${item.text.slice(0, 240)}...` : item.text}
+                <div key={item.id} className="item thread-card bouncy-card">
+                  <div className="card-main-content">
+                    <div className="card-top-row">
+                      <div className="body-text card-title" style={{ fontSize: "0.92rem", fontWeight: 500 }}>
+                        {item.text.length > 240 ? `${item.text.slice(0, 240)}...` : item.text}
+                      </div>
                     </div>
-                    <div className="meta">
-                      <span className="chip project-chip">{item.project ? `📁 ${item.project}` : "unfiled"}</span>
-                      <span className="dot">•</span>
-                      <span>{localTime(item.created_at)}</span>
-                      {item.attempts > 0 && (
-                        <>
-                          <span className="dot">•</span>
-                          <span>
-                            {item.attempts} attempt{item.attempts === 1 ? "" : "s"}
-                          </span>
-                        </>
-                      )}
+                    <div className="card-bottom-row">
+                      <div className="card-tags">
+                        <span className="chip project-chip">{item.project ? `📁 ${item.project}` : "unfiled"}</span>
+                      </div>
+                      <div className="card-stats">
+                        {item.attempts > 0 && (
+                          <>
+                            <span>{item.attempts} {item.attempts === 1 ? "try" : "tries"}</span>
+                            <span className="dot">·</span>
+                          </>
+                        )}
+                        <span>{localTime(item.created_at)}</span>
+                      </div>
                     </div>
                     {item.last_error && (
-                      <div className="pitch" style={{ color: "var(--warn)", marginTop: 4 }}>
+                      <div className="pitch" style={{ color: "var(--warn)", marginTop: 2, fontSize: "0.82rem" }}>
                         ⚠️ {item.last_error}
                       </div>
                     )}
                   </div>
                   <button
-                    className="quiet thread-delete bouncy-btn"
+                    className="quiet card-delete-btn bouncy-btn"
                     aria-label="Discard this note"
                     onClick={() => void discard(item.id)}
                     type="button"

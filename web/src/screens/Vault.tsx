@@ -139,18 +139,21 @@ export function Vault() {
               {hits.map((hit) => (
                 <button
                   key={hit.record.id}
-                  className="item hit-item bouncy-card"
+                  className="item vault-card bouncy-card"
                   onClick={() => navigate(`/vault/${hit.record.id}`)}
                 >
-                  <div className="hit-header">
-                    <h3>{hit.record.title}</h3>
+                  <div className="card-top-row">
+                    <h3 className="card-title">{hit.record.title}</h3>
                     <span className={`chip ${hit.matched_by}`}>{MATCH_LABEL[hit.matched_by]}</span>
                   </div>
                   <div className="snippet">{hit.snippet}</div>
-                  <div className="meta">
-                    <span className="chip project-chip">📁 {hit.record.project}</span>
-                    <span className="dot">•</span>
-                    <span>{localTime(hit.record.updated_at)}</span>
+                  <div className="card-bottom-row">
+                    <div className="card-tags">
+                      <span className="chip project-chip">📁 {hit.record.project}</span>
+                    </div>
+                    <div className="card-stats">
+                      <span>{localTime(hit.record.updated_at)}</span>
+                    </div>
                   </div>
                 </button>
               ))}
@@ -170,21 +173,26 @@ export function Vault() {
               {records.map((record) => (
                 <button
                   key={record.id}
-                  className="item vault-record-item bouncy-card"
+                  className="item vault-card bouncy-card"
                   onClick={() => navigate(`/vault/${record.id}`)}
                 >
-                  <h3>{record.title}</h3>
-                  <div className="snippet">{record.body}</div>
-                  <div className="meta">
-                    <span className="chip project-chip">📁 {record.project}</span>
-                    <span className="dot">•</span>
-                    <span>{localTime(record.created_at)}</span>
+                  <div className="card-top-row">
+                    <h3 className="card-title">{record.title}</h3>
                     {record.category && (
-                      <>
-                        <span className="dot">•</span>
-                        <span className="chip category-chip">🏷️ {record.category}</span>
-                      </>
+                      <span className="chip category-chip">🏷️ {record.category}</span>
                     )}
+                  </div>
+                  <div className="snippet">{record.body}</div>
+                  <div className="card-bottom-row">
+                    <div className="card-tags">
+                      <span className="chip project-chip">📁 {record.project}</span>
+                      {record.subcategory && (
+                        <span className="chip">📂 {record.subcategory}</span>
+                      )}
+                    </div>
+                    <div className="card-stats">
+                      <span>{localTime(record.created_at)}</span>
+                    </div>
                   </div>
                 </button>
               ))}

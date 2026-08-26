@@ -206,26 +206,28 @@ export function Chat() {
           {threads?.map((thread) => (
             <div
               key={thread.id}
-              className={`item thread-item ${thread.id === threadId ? "current" : ""}`}
+              className={`item thread-card ${thread.id === threadId ? "current" : ""}`}
             >
-              <button className="thread-open" onClick={() => navigate(`/chat/${thread.id}`)}>
-                <h3>{thread.title}</h3>
-                <div className="meta">
-                  <span className="chip project-chip">{thread.project ?? "all projects"}</span>
-                  <span className="dot">•</span>
-                  <span>{thread.message_count} msgs</span>
-                  {thread.has_summary && (
-                    <>
-                      <span className="dot">•</span>
+              <button className="card-main-btn" onClick={() => navigate(`/chat/${thread.id}`)}>
+                <div className="card-top-row">
+                  <h3 className="card-title">{thread.title}</h3>
+                </div>
+                <div className="card-bottom-row">
+                  <div className="card-tags">
+                    <span className="chip project-chip">{thread.project ?? "all projects"}</span>
+                    {thread.has_summary && (
                       <span className="chip summary-chip">✨ summarized</span>
-                    </>
-                  )}
-                  <span className="dot">•</span>
-                  <span>{localTime(thread.updated_at)}</span>
+                    )}
+                  </div>
+                  <div className="card-stats">
+                    <span>{thread.message_count} msgs</span>
+                    <span className="dot">·</span>
+                    <span>{localTime(thread.updated_at)}</span>
+                  </div>
                 </div>
               </button>
               <button
-                className="quiet thread-delete"
+                className="quiet card-delete-btn"
                 aria-label={`Delete ${thread.title}`}
                 onClick={() => void removeThread(thread.id)}
                 type="button"

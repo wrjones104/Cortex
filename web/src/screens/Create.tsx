@@ -292,10 +292,10 @@ export function Create() {
                     aria-label={`Keep ${idea.title}`}
                   />
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <h3>
-                      {idea.title}
-                      {idea.banked && <span className="chip summary-chip" style={{ marginLeft: 8 }}>✅ filed</span>}
-                    </h3>
+                    <div className="card-top-row">
+                      <h3 className="card-title">{idea.title}</h3>
+                      {idea.banked && <span className="chip summary-chip">✅ filed</span>}
+                    </div>
                     {idea.pitch && <div className="pitch">{idea.pitch}</div>}
                     <details>
                       <summary>Read full details</summary>
@@ -341,21 +341,28 @@ export function Create() {
             <h2>Earlier Brainstorms</h2>
             <div className="list">
               {history.map((generation) => (
-                <div key={generation.id} className="item thread-item">
-                  <button className="thread-open" onClick={() => void showById(generation.id)}>
-                    <h3 className="truncate">{generation.prompt}</h3>
-                    <div className="meta">
-                      <span className="chip">{generation.mode === "options" ? "alternatives" : "ramble"}</span>
-                      <span className="dot">•</span>
-                      <span>{generation.ideas.length} ideas</span>
-                      <span className="dot">•</span>
-                      <span>{generation.ideas.filter((i) => i.banked).length} kept</span>
-                      <span className="dot">•</span>
-                      <span>{localTime(generation.created_at)}</span>
+                <div key={generation.id} className="item thread-card">
+                  <button className="card-main-btn" onClick={() => void showById(generation.id)}>
+                    <div className="card-top-row">
+                      <h3 className="card-title">{generation.prompt}</h3>
+                    </div>
+                    <div className="card-bottom-row">
+                      <div className="card-tags">
+                        <span className="chip mode-chip">
+                          {generation.mode === "options" ? "✨ alternatives" : "📝 ramble"}
+                        </span>
+                      </div>
+                      <div className="card-stats">
+                        <span>
+                          {generation.ideas.filter((i) => i.banked).length}/{generation.ideas.length} kept
+                        </span>
+                        <span className="dot">·</span>
+                        <span>{localTime(generation.created_at)}</span>
+                      </div>
                     </div>
                   </button>
                   <button
-                    className="quiet thread-delete"
+                    className="quiet card-delete-btn"
                     aria-label={`Delete generation ${generation.id}`}
                     onClick={() => void remove(generation.id)}
                     type="button"

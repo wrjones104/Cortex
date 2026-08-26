@@ -357,10 +357,26 @@ All optional — the defaults work.
 | `CORTEX_LIBRARIAN_MODEL` | `qwen2.5:14b` |
 | `CORTEX_CREATIVE_MODEL` | `gemma4:12b` |
 | `CORTEX_UTILITY_MODEL` | falls back to the Librarian |
+| `CORTEX_MODEL_PROFILE` | `split` (or `single`) |
+| `CORTEX_SINGLE_MODEL` | `smtek/Qwen3.8-27B:Q3_K_XL-16gb` |
+| `CORTEX_MAX_CONTEXT` | `32768` |
 | `CORTEX_CHUNK_TARGET` / `_MAX` / `_OVERLAP` | `400` / `512` / `60` |
 | `CORTEX_MAX_DISTANCE` | per embedding model |
 | `CORTEX_API_TOKEN` | generated on first run |
 | `CORTEX_WEB_DIR` | the packaged client, then `web/dist` |
+
+`CORTEX_MODEL_PROFILE=single` points every chat role — filing, answering, brainstorming —
+at `CORTEX_SINGLE_MODEL` instead of a specialist per role. The per-role settings are kept,
+so switching back restores them. Worth trying on a card that can only hold one model at a
+time, where moving between filing and brainstorming otherwise costs a full reload.
+
+`CORTEX_MAX_CONTEXT` is the window Cortex asks Ollama to load, and therefore the one it
+budgets a conversation against. Ollama's `/api/show` reports the architecture's maximum
+rather than the window a model was actually loaded with, so Cortex declares `num_ctx`
+explicitly instead of trusting the probe — the two can then never disagree. A model's own
+maximum still wins when it is smaller. Lower this if the KV cache will not fit alongside
+the weights; the symptom of setting it too high is offloading to CPU, which is slow but
+visible, rather than a prompt silently truncated on the server.
 
 `CORTEX_MAX_DISTANCE` is the relevance floor for the vector arm — how far a vector hit
 may be before it is dropped. Without one, a query about something you never wrote hands

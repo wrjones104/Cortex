@@ -72,3 +72,67 @@ def test_fallback_title_is_truncated_not_unbounded():
 def test_fallback_title_of_empty_text():
     assert _fallback_title("") == "Untitled"
     assert _fallback_title("   \n  ") == "Untitled"
+
+
+# --- the declared context window ------------------------------------------
+#
+# /api/show reports the architecture's maximum, not the window Ollama actually
+# loaded. Budgeting against the former while the server enforces the latter is
+# a silent truncation, so context_length is both clamped and declared.
+
+
+class _FakeClient:
+    """Records what was sent to Ollama."""
+
+    def __init__(self, reply: str = "ok") -> None:
+        self.calls: list[dict] = []
+        self.reply = reply
+
+    def chat(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"message": {"content": self.reply}, "prompt_eval_count": 7}
+
+
+def _chat_with(monkeypatch, probed: int, max_context: int):
+    from cortex.llm import OllamaChat
+
+    chatter = OllamaChat("http://x", "fake:1b", max_context=max_context)
+    monkeypatch.setattr(type(chatter), "_probe_context", lambda self: probed)
+    client = _FakeClient()
+    monkeypatch.setattr(type(chatter), "_client", property(lambda self: client))
+    return chatter, client
+
+
+def test_context_is_capped_at_what_we_are_willing_to_load(monkeypatch):
+    chatter, _ = _chat_with(monkeypatch, probed=262_144, max_context=32_768)
+    assert chatter.context_length == 32_768
+
+
+def test_a_model_smaller_than_the_cap_keeps_its_own_window(monkeypatch):
+    chatter, _ = _chat_with(monkeypatch, probed=8_192, max_context=32_768)
+    assert chatter.context_length == 8_192
+
+
+def test_the_window_we_budget_against_is_the_one_we_send(monkeypatch):
+    chatter, client = _chat_with(monkeypatch, probed=262_144, max_context=16_384)
+    chatter.complete([{"role": "user", "content": "hello"}])
+
+    assert client.calls[0]["options"]["num_ctx"] == chatter.context_length == 16_384
+
+
+def test_streaming_declares_the_same_window(monkeypatch):
+    chatter, client = _chat_with(monkeypatch, probed=32_768, max_context=8_192)
+    client.reply = ""
+    monkeypatch.setattr(
+        type(client),
+        "chat",
+        lambda self, **kw: (self.calls.append(kw), iter([{"message": {"content": "hi"}}]))[1],
+    )
+    list(chatter.stream([{"role": "user", "content": "hello"}]))
+
+    assert client.calls[0]["options"]["num_ctx"] == 8_192
+
+
+def test_a_nonsense_cap_cannot_produce_an_unusable_window(monkeypatch):
+    chatter, _ = _chat_with(monkeypatch, probed=32_768, max_context=0)
+    assert chatter.context_length == 512

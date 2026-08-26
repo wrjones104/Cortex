@@ -522,6 +522,74 @@ def test_an_empty_patch_changes_nothing(client):
     assert client.patch("/api/settings", json={}).json() == before
 
 
+# --- the model profile -----------------------------------------------------
+#
+# One model for every role, or a specialist per role. The per-role choices
+# survive the switch either way, so trying single mode is not destructive.
+
+
+def test_the_default_profile_is_a_specialist_per_role(client):
+    body = client.get("/api/settings").json()
+    assert body["model_profile"] == "split"
+    assert body["effective_librarian"] == body["librarian_model"]
+    assert body["effective_creative"] == body["creative_model"]
+
+
+def test_utility_falls_back_to_the_librarian_when_unset(client):
+    body = client.get("/api/settings").json()
+    assert body["utility_model"] == ""
+    assert body["effective_utility"] == body["librarian_model"]
+
+
+def test_single_mode_points_every_role_at_one_model(client, fake_models):
+    client.patch("/api/settings", json={"single_model": "gemma4:12b"})
+    body = client.patch("/api/settings", json={"model_profile": "single"}).json()
+
+    assert body["model_profile"] == "single"
+    assert body["effective_librarian"] == "gemma4:12b"
+    assert body["effective_creative"] == "gemma4:12b"
+    assert body["effective_utility"] == "gemma4:12b"
+
+
+def test_the_split_choices_survive_a_trip_through_single_mode(client, fake_models):
+    """Switching back has to restore the arrangement, not make you rebuild it."""
+    client.patch("/api/settings", json={"librarian_model": "gemma4:12b"})
+    client.patch("/api/settings", json={"single_model": "qwen2.5:14b"})
+    client.patch("/api/settings", json={"model_profile": "single"})
+
+    stored = client.get("/api/settings").json()
+    assert stored["librarian_model"] == "gemma4:12b"  # kept, just not in force
+    assert stored["effective_librarian"] == "qwen2.5:14b"
+
+    back = client.patch("/api/settings", json={"model_profile": "split"}).json()
+    assert back["effective_librarian"] == "gemma4:12b"
+
+
+def test_the_profile_is_not_validated_as_a_model_name(client, fake_models):
+    """'single' is a mode, not something you can pull from Ollama."""
+    assert client.patch("/api/settings", json={"model_profile": "single"}).status_code == 200
+
+
+def test_an_unknown_profile_is_refused(client, fake_models):
+    response = client.patch("/api/settings", json={"model_profile": "hybrid"})
+    assert response.status_code == 422
+    assert client.get("/api/settings").json()["model_profile"] == "split"
+
+
+def test_the_single_model_is_still_checked_against_ollama(client, fake_models):
+    response = client.patch("/api/settings", json={"single_model": "embeddinggemma"})
+    assert response.status_code == 422
+
+
+def test_status_reports_the_models_the_profile_will_actually_load(client, fake_models):
+    client.patch("/api/settings", json={"single_model": "gemma4:12b"})
+    client.patch("/api/settings", json={"model_profile": "single"})
+
+    roles = {m["role"]: m["name"] for m in client.get("/api/status").json()["models"]}
+    assert roles["all chat roles"] == "gemma4:12b"
+    assert "librarian" not in roles and "creative" not in roles
+
+
 # --- conversations ---------------------------------------------------------
 
 

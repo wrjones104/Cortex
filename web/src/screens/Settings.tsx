@@ -29,12 +29,22 @@ export function Settings() {
     );
   }, [api]);
 
-  async function updateModel(field: "librarian_model" | "creative_model", name: string) {
+  type ModelField =
+    | "librarian_model"
+    | "creative_model"
+    | "utility_model"
+    | "single_model";
+
+  async function updateModel(field: ModelField, name: string) {
+    await save({ [field]: name });
+  }
+
+  async function save(patch: Parameters<typeof api.updateSettings>[0]) {
     setBusy(true);
     setError(null);
     setSaved(null);
     try {
-      setSettings(await api.updateSettings({ [field]: name }));
+      setSettings(await api.updateSettings(patch));
       setSaved("Saved.");
     } catch (cause) {
       setError(errorMessage(cause));
@@ -43,17 +53,7 @@ export function Settings() {
     }
   }
 
-  // Only chat-capable models are offered. The prototype listed every installed
-  // model, so picking an embedder as your Librarian was possible - and broke
-  // everything the next time you generated anything.
   const chatModels = models?.filter((m) => m.can_chat) ?? [];
-
-  // Ollama treats a bare name as the :latest tag, so "embeddinggemma" and
-  // "embeddinggemma:latest" are the same model. Compare them that way, or a
-  // perfectly good setting is labelled "not installed".
-  const tagged = (name: string) => (name.includes(":") ? name : `${name}:latest`);
-  const isInstalled = (name: string) =>
-    chatModels.some((m) => tagged(m.name) === tagged(name));
   const problems = status ? Object.entries(status.integrity).filter(([, n]) => n > 0) : [];
 
   return (
@@ -85,53 +85,64 @@ export function Settings() {
 
           {settings && models && (
             <>
-              <div>
-                <label htmlFor="librarian">Librarian &mdash; files your notes</label>
-                <select
-                  id="librarian"
-                  value={isInstalled(settings.librarian_model)
-                    ? chatModels.find((m) => tagged(m.name) === tagged(settings.librarian_model))!.name
-                    : settings.librarian_model}
-                  disabled={busy}
-                  onChange={(event) => void updateModel("librarian_model", event.target.value)}
-                >
-                  {!isInstalled(settings.librarian_model) && (
-                    <option value={settings.librarian_model}>
-                      {settings.librarian_model} (not installed)
-                    </option>
-                  )}
-                  {chatModels.map((model) => (
-                    <option key={model.name} value={model.name}>
-                      {model.name}
-                      {model.parameter_size ? ` — ${model.parameter_size}` : ""}
-                    </option>
-                  ))}
-                </select>
+              <div className="card stack" style={{ gap: 10 }}>
+                <strong style={{ fontSize: "0.9rem" }}>How the work is divided</strong>
+                <label className="toggle">
+                  <input
+                    type="radio"
+                    name="model-profile"
+                    checked={settings.model_profile !== "single"}
+                    disabled={busy}
+                    onChange={() => void save({ model_profile: "split" })}
+                  />
+                  <span>A specialist per role</span>
+                </label>
+                <label className="toggle">
+                  <input
+                    type="radio"
+                    name="model-profile"
+                    checked={settings.model_profile === "single"}
+                    disabled={busy}
+                    onChange={() => void save({ model_profile: "single" })}
+                  />
+                  <span>One model for everything</span>
+                </label>
+                <p style={{ margin: 0, fontSize: "0.84rem", color: "var(--muted)" }}>
+                  {settings.model_profile === "single"
+                    ? "Filing, answering and brainstorming all run on one model, so Ollama never swaps weights between them. Your per-role choices are kept, and come back if you switch."
+                    : "Each role gets the model that suits it. If your card can only hold one model at a time, moving between filing and brainstorming means reloading it."}
+                </p>
               </div>
 
-              <div>
-                <label htmlFor="creative">Creative &mdash; brainstorming</label>
-                <select
-                  id="creative"
-                  value={isInstalled(settings.creative_model)
-                    ? chatModels.find((m) => tagged(m.name) === tagged(settings.creative_model))!.name
-                    : settings.creative_model}
-                  disabled={busy}
-                  onChange={(event) => void updateModel("creative_model", event.target.value)}
-                >
-                  {!isInstalled(settings.creative_model) && (
-                    <option value={settings.creative_model}>
-                      {settings.creative_model} (not installed)
-                    </option>
-                  )}
-                  {chatModels.map((model) => (
-                    <option key={model.name} value={model.name}>
-                      {model.name}
-                      {model.parameter_size ? ` — ${model.parameter_size}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {settings.model_profile === "single" ? (
+                <ModelPicker
+                  id="single"
+                  label="Every role — files, answers and brainstorms"
+                  value={settings.single_model}
+                  models={chatModels}
+                  busy={busy}
+                  onChange={(name) => void updateModel("single_model", name)}
+                />
+              ) : (
+                <>
+                  <ModelPicker
+                    id="librarian"
+                    label="Librarian — files your notes, and answers in chat"
+                    value={settings.librarian_model}
+                    models={chatModels}
+                    busy={busy}
+                    onChange={(name) => void updateModel("librarian_model", name)}
+                  />
+                  <ModelPicker
+                    id="creative"
+                    label="Creative — brainstorming"
+                    value={settings.creative_model}
+                    models={chatModels}
+                    busy={busy}
+                    onChange={(name) => void updateModel("creative_model", name)}
+                  />
+                </>
+              )}
 
               <div>
                 <label>Embedding &mdash; powers search</label>
@@ -193,6 +204,51 @@ export function Settings() {
         <Account />
       </div>
     </>
+  );
+}
+
+/** One labelled model dropdown. Only chat-capable models are offered - the
+ *  prototype listed every installed model, so picking an embedder as your
+ *  Librarian was possible, and broke the next thing you generated. */
+function ModelPicker({
+  id,
+  label,
+  value,
+  models,
+  busy,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  models: ModelInfo[];
+  busy: boolean;
+  onChange: (name: string) => void;
+}) {
+  // Ollama treats a bare name as the :latest tag, so "embeddinggemma" and
+  // "embeddinggemma:latest" are the same model. Compare them that way, or a
+  // perfectly good setting is labelled "not installed".
+  const tagged = (name: string) => (name.includes(":") ? name : `${name}:latest`);
+  const match = models.find((m) => tagged(m.name) === tagged(value));
+
+  return (
+    <div>
+      <label htmlFor={id}>{label}</label>
+      <select
+        id={id}
+        value={match ? match.name : value}
+        disabled={busy}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {!match && <option value={value}>{value} (not installed)</option>}
+        {models.map((model) => (
+          <option key={model.name} value={model.name}>
+            {model.name}
+            {model.parameter_size ? ` — ${model.parameter_size}` : ""}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 

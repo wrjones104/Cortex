@@ -13,6 +13,8 @@ import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .tokens import DEFAULT_MAX_CONTEXT
+
 
 def default_data_dir() -> Path:
     """Platform-appropriate location for the vault.
@@ -50,6 +52,21 @@ class Config:
     # Small and fast: condensation and summaries run often and are not
     # the answer. Empty means "use the librarian".
     utility_model: str = ""
+
+    # A specialist per role, or one model for all of them. "split" is the
+    # historical arrangement and stays the default. "single" points every
+    # chat role at single_model, which is worth trying on a card that can
+    # only hold one set of weights at a time: with a specialist per role,
+    # filing a note and then brainstorming evicts and reloads a whole model,
+    # and that reload can cost more than the better-suited model saves.
+    model_profile: str = "split"
+    single_model: str = "smtek/Qwen3.8-27B:Q3_K_XL-16gb"
+
+    # The window Cortex asks Ollama to load, and the one it budgets against.
+    # Lower it if the KV cache does not fit alongside the weights; the cost of
+    # getting this wrong is visible (slow, offloaded to CPU) rather than
+    # silent. See OllamaChat.context_length.
+    max_context: int = DEFAULT_MAX_CONTEXT
 
     # Chunking. Kept well under the 2048-token ceiling shared by every
     # embedding model we support, so a chunk can never be rejected or
@@ -118,6 +135,9 @@ class Config:
             librarian_model=os.environ.get("CORTEX_LIBRARIAN_MODEL", cls.librarian_model),
             creative_model=os.environ.get("CORTEX_CREATIVE_MODEL", cls.creative_model),
             utility_model=os.environ.get("CORTEX_UTILITY_MODEL", cls.utility_model),
+            model_profile=os.environ.get("CORTEX_MODEL_PROFILE", cls.model_profile),
+            single_model=os.environ.get("CORTEX_SINGLE_MODEL", cls.single_model),
+            max_context=_int("CORTEX_MAX_CONTEXT", cls.max_context),
             chunk_target_tokens=_int("CORTEX_CHUNK_TARGET", cls.chunk_target_tokens),
             chunk_max_tokens=_int("CORTEX_CHUNK_MAX", cls.chunk_max_tokens),
             chunk_overlap_tokens=_int("CORTEX_CHUNK_OVERLAP", cls.chunk_overlap_tokens),

@@ -17,6 +17,7 @@ from typing import Any, Protocol
 import ollama
 
 from .ollama_client import client_for
+from .tokens import DEFAULT_MAX_CONTEXT
 
 LIBRARIAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -97,9 +98,10 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 class OllamaLibrarian:
-    def __init__(self, host: str, model: str) -> None:
+    def __init__(self, host: str, model: str, max_context: int = DEFAULT_MAX_CONTEXT) -> None:
         self.model = model
         self.host = host
+        self.max_context = max_context
 
     @property
     def _client(self) -> ollama.Client:
@@ -131,12 +133,19 @@ class OllamaLibrarian:
 
         try:
             response = self._client.chat(
-                model=self.model, messages=messages, format=LIBRARIAN_SCHEMA, think=False
+                model=self.model,
+                messages=messages,
+                format=LIBRARIAN_SCHEMA,
+                think=False,
+                options={"num_ctx": self.max_context},
             )
         except ollama.ResponseError as exc:
             if "think" in str(exc).lower():
                 response = self._client.chat(
-                    model=self.model, messages=messages, format=LIBRARIAN_SCHEMA
+                    model=self.model,
+                    messages=messages,
+                    format=LIBRARIAN_SCHEMA,
+                    options={"num_ctx": self.max_context},
                 )
             else:
                 raise LibrarianError(f"{self.model} failed: {exc}") from exc
@@ -189,9 +198,10 @@ class Chatter(Protocol):
 class OllamaChat:
     """Chat through a local Ollama server."""
 
-    def __init__(self, host: str, model: str) -> None:
+    def __init__(self, host: str, model: str, max_context: int = DEFAULT_MAX_CONTEXT) -> None:
         self.model = model
         self.host = host
+        self.max_context = max_context
         self._context: int | None = None
 
     @property
@@ -200,15 +210,31 @@ class OllamaChat:
 
     @property
     def context_length(self) -> int:
-        """The model's real window, asked for rather than assumed.
+        """The window in force: the smaller of what the model can do and what
+        we are willing to load.
 
-        /api/show reports it under a family-prefixed key (qwen2.context_length,
-        llama.context_length, ...), so the family is discovered rather than
-        hardcoded. Falls back conservatively if the model will not say.
+        This number does double duty, and that is the point. It is what
+        `build_window` budgets against, and it is what gets sent to Ollama as
+        `num_ctx`, so the two can never disagree.
+
+        They used to. /api/show reports the *architecture's* maximum, not the
+        window the model was actually loaded with - Ollama loads its own
+        default unless told otherwise, and silently truncates anything past
+        it. Believing the probe meant building a prompt several times larger
+        than the server would accept and never being told: retrieved notes
+        dropped out of the middle of the prompt, and the overflow check that
+        should have triggered compaction was measuring against a window that
+        did not exist. A model advertising 262k made it a 60x error.
         """
         if self._context is None:
-            self._context = self._probe_context()
+            self._context = max(512, min(self._probe_context(), self.max_context))
         return self._context
+
+    def _options(self) -> dict[str, int]:
+        """Sent on every call, identically, so the window is declared rather
+        than inferred. Keeping it constant across roles also stops Ollama
+        reloading the weights just because a number changed."""
+        return {"num_ctx": self.context_length}
 
     def _probe_context(self) -> int:
         from .tokens import FALLBACK_CONTEXT
@@ -240,6 +266,7 @@ class OllamaChat:
                 messages=messages,
                 stream=False,
                 think=think,
+                options=self._options(),
                 **({"format": format} if format is not None else {}),
             )
         except Exception as exc:  # noqa: BLE001 - surfaced with context
@@ -266,6 +293,7 @@ class OllamaChat:
                 messages=messages,
                 stream=True,
                 think=think,
+                options=self._options(),
                 **({"format": format} if format is not None else {}),
             )
             prompt_tokens = 0

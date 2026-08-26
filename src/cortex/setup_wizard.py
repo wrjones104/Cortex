@@ -110,10 +110,18 @@ def inspect(config: Config) -> Plan:
     )
 
     by_name = {normalise_model(m["name"]): m for m in available}
+    # Only the models the configured profile will actually load - telling
+    # someone to pull a creative model that single mode never calls is noise.
     wanted = (
         ("embedding", config.embed_model, "can_embed"),
-        ("librarian", config.librarian_model, "can_chat"),
-        ("creative", config.creative_model, "can_chat"),
+        *(
+            (("all chat roles", config.single_model, "can_chat"),)
+            if config.model_profile == "single"
+            else (
+                ("librarian", config.librarian_model, "can_chat"),
+                ("creative", config.creative_model, "can_chat"),
+            )
+        ),
     )
 
     for role, model, capability in wanted:

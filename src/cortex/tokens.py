@@ -39,6 +39,12 @@ OUTPUT_RESERVE = 0.30
 # Used when a model will not report its context length.
 FALLBACK_CONTEXT = 8192
 
+# The window Cortex asks Ollama to load, and therefore the one it budgets
+# against. This is a ceiling, not a target: the model's own maximum wins when
+# it is smaller. See OllamaChat.context_length for why the two must be the
+# same number.
+DEFAULT_MAX_CONTEXT = 32768
+
 
 def _key(model: str) -> str:
     return f"chars_per_token:{model}"

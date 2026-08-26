@@ -249,7 +249,7 @@ def build_vault(config: Config) -> Vault:
         raise
 
     librarian = _librarian_override or OllamaLibrarian(
-        config.ollama_host, settings.librarian_model
+        config.ollama_host, settings.effective_librarian, config.max_context
     )
     return Vault(conn=conn, config=config, embedder=_embedder, librarian=librarian)
 
@@ -281,7 +281,9 @@ def build_chatter(vault: Vault) -> OllamaChat:
     if _chatter_override is not None:
         return _chatter_override
     settings = get_settings(vault.conn, vault.config)
-    return OllamaChat(vault.config.ollama_host, settings.librarian_model)
+    return OllamaChat(
+        vault.config.ollama_host, settings.effective_librarian, vault.config.max_context
+    )
 
 
 def build_utility(vault: Vault) -> OllamaChat:
@@ -289,13 +291,14 @@ def build_utility(vault: Vault) -> OllamaChat:
 
     Kept separate from the answering model because these are small, frequent
     calls where speed matters more than quality - a 9B does them fine while
-    a 27B answers. Falls back to the answering model when unset.
+    a 27B answers. Falls back to the answering model when unset, and is
+    folded into the one model under the 'single' profile.
     """
     if _chatter_override is not None:
         return _chatter_override
     settings = get_settings(vault.conn, vault.config)
     return OllamaChat(
-        vault.config.ollama_host, settings.utility_model or settings.librarian_model
+        vault.config.ollama_host, settings.effective_utility, vault.config.max_context
     )
 
 
@@ -305,7 +308,9 @@ def build_creative(vault: Vault) -> OllamaChat:
     if _chatter_override is not None:
         return _chatter_override
     settings = get_settings(vault.conn, vault.config)
-    return OllamaChat(vault.config.ollama_host, settings.creative_model)
+    return OllamaChat(
+        vault.config.ollama_host, settings.effective_creative, vault.config.max_context
+    )
 
 
 Authed = Depends(current_user)

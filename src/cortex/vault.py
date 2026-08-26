@@ -65,5 +65,7 @@ def open_vault(config: Config) -> Vault:
         conn=conn,
         config=config,
         embedder=embedder,
-        librarian=OllamaLibrarian(config.ollama_host, settings.librarian_model),
+        librarian=OllamaLibrarian(
+            config.ollama_host, settings.effective_librarian, config.max_context
+        ),
     )

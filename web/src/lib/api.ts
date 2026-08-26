@@ -52,8 +52,16 @@ export interface ModelInfo {
 export interface Settings {
   librarian_model: string;
   creative_model: string;
+  utility_model: string;
   embed_model: string;
   embed_model_locked: boolean;
+  /** "split" for a specialist per role, "single" for one model doing all of them. */
+  model_profile: "split" | "single";
+  single_model: string;
+  /** What each role resolves to once the profile is applied. */
+  effective_librarian: string;
+  effective_creative: string;
+  effective_utility: string;
 }
 
 export interface Status {
@@ -504,8 +512,18 @@ export class CortexApi {
   models = () => this.request<ModelInfo[]>("/api/models");
   settings = () => this.request<Settings>("/api/settings");
 
-  updateSettings = (patch: Partial<Pick<Settings, "librarian_model" | "creative_model">>) =>
-    this.request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
+  updateSettings = (
+    patch: Partial<
+      Pick<
+        Settings,
+        | "librarian_model"
+        | "creative_model"
+        | "utility_model"
+        | "single_model"
+        | "model_profile"
+      >
+    >,
+  ) => this.request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
 
   records = (params: { project?: string; limit?: number; offset?: number } = {}) =>
     this.request<RecordList>("/api/records", { params });

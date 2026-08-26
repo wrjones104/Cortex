@@ -187,12 +187,34 @@ class SettingsOut(BaseModel):
         description="The embedding model is fixed by the vector index. "
         "Changing it invalidates every vector, so it needs `cortex reindex`.",
     )
+    model_profile: str = Field(
+        default="split",
+        description="'split' for a specialist per role, 'single' for one model "
+        "doing all of them. The per-role choices above are kept either way.",
+    )
+    single_model: str = Field(
+        default="",
+        description="The model every role uses under the 'single' profile.",
+    )
+    effective_librarian: str = Field(
+        default="",
+        description="What actually files notes and answers, once the profile is applied.",
+    )
+    effective_creative: str = Field(
+        default="", description="What actually brainstorms, once the profile is applied."
+    )
+    effective_utility: str = Field(
+        default="",
+        description="What actually condenses and summarises, once the profile is applied.",
+    )
 
 
 class SettingsPatch(BaseModel):
     librarian_model: str | None = None
     creative_model: str | None = None
     utility_model: str | None = None
+    single_model: str | None = None
+    model_profile: str | None = None
 
 
 class ThreadOut(BaseModel):

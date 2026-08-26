@@ -71,7 +71,13 @@ from ..embed import EmbeddingError
 from ..llm import LibrarianError
 from ..migrations import migrate
 from ..retrieve import search as search_vault
-from ..settings import get_settings, installed_models, normalise_model, set_settings
+from ..settings import (
+    MODEL_FIELDS,
+    get_settings,
+    installed_models,
+    normalise_model,
+    set_settings,
+)
 from ..store import (
     DuplicateRecordError,
     ProjectNameTakenError,
@@ -480,8 +486,17 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
             )
             for role, name in (
                 ("embed", settings.embed_model),
-                ("librarian", settings.librarian_model),
-                ("creative", settings.creative_model),
+                # What will actually be loaded, not what is stored: under the
+                # single profile the per-role choices are inert, and reporting
+                # them would send you pulling a model nothing is going to use.
+                *(
+                    (("all chat roles", settings.single_model),)
+                    if settings.single
+                    else (
+                        ("librarian", settings.librarian_model),
+                        ("creative", settings.creative_model),
+                    )
+                ),
             )
         ]
 
@@ -532,6 +547,11 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
             creative_model=settings.creative_model,
             utility_model=settings.utility_model,
             embed_model=settings.embed_model,
+            model_profile=settings.model_profile,
+            single_model=settings.single_model,
+            effective_librarian=settings.effective_librarian,
+            effective_creative=settings.effective_creative,
+            effective_utility=settings.effective_utility,
         )
 
     @app.patch(
@@ -557,14 +577,22 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
                 chat_capable = None
 
             if chat_capable is not None:
+                # Only the fields that name a model. model_profile is a mode,
+                # and checking it against installed models would reject
+                # "single" as an uninstalled model.
                 for field, name in requested.items():
+                    if field not in MODEL_FIELDS:
+                        continue
                     if normalise_model(name) not in chat_capable:
                         raise HTTPException(
                             status_code=422,
                             detail=f"'{name}' cannot be used as the {field.split('_')[0]} "
                             "model - it is not installed, or does not support chat.",
                         )
-            set_settings(conn, **requested)
+            try:
+                set_settings(conn, **requested)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         settings = get_settings(conn, config)
         return SettingsOut(
@@ -572,6 +600,11 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
             creative_model=settings.creative_model,
             utility_model=settings.utility_model,
             embed_model=settings.embed_model,
+            model_profile=settings.model_profile,
+            single_model=settings.single_model,
+            effective_librarian=settings.effective_librarian,
+            effective_creative=settings.effective_creative,
+            effective_utility=settings.effective_utility,
         )
 
     # --- projects ----------------------------------------------------------

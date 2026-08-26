@@ -535,11 +535,18 @@ def doctor() -> None:
         )
     else:
         typer.secho("  private    Ollama answers on this machine only", fg=typer.colors.GREEN)
-    for label, name in (
+    roles = (
         ("embed", config.embed_model),
-        ("librarian", config.librarian_model),
-        ("creative", config.creative_model),
-    ):
+        *(
+            (("all chat roles", config.single_model),)
+            if config.model_profile == "single"
+            else (
+                ("librarian", config.librarian_model),
+                ("creative", config.creative_model),
+            )
+        ),
+    )
+    for label, name in roles:
         ok = name in installed or f"{name}:latest" in installed
         colour = typer.colors.GREEN if ok else typer.colors.RED
         suffix = "" if ok else f"  - not installed, run: ollama pull {name}"
@@ -919,10 +926,8 @@ def ask(
         _fail(f"{exc}\nIs Ollama running, and is '{config.embed_model}' pulled?")
 
     settings = get_settings(vault.conn, config)
-    chatter = OllamaChat(config.ollama_host, settings.librarian_model)
-    utility = OllamaChat(
-        config.ollama_host, settings.utility_model or settings.librarian_model
-    )
+    chatter = OllamaChat(config.ollama_host, settings.effective_librarian, config.max_context)
+    utility = OllamaChat(config.ollama_host, settings.effective_utility, config.max_context)
 
     if thread_id is None:
         thread = create_thread(vault.conn, project=project)
@@ -991,7 +996,7 @@ def brainstorm(
         _fail(f"{exc}\nIs Ollama running, and is '{config.embed_model}' pulled?")
 
     settings = get_settings(vault.conn, config)
-    creative = OllamaChat(config.ollama_host, settings.creative_model)
+    creative = OllamaChat(config.ollama_host, settings.effective_creative, config.max_context)
 
     generation_id = None
     try:
@@ -1098,7 +1103,7 @@ def ideas(
                 vault.conn,
                 vault.librarian,
                 OllamaChat(
-                    config.ollama_host, settings.utility_model or settings.librarian_model
+                    config.ollama_host, settings.effective_utility, config.max_context
                 ),
                 generation_id,
             )

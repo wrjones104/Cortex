@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 const NOTICE_ICONS = {
   info: "💡",
@@ -81,17 +81,25 @@ export function ProjectPicker({
   allowNew?: boolean;
   allLabel?: string;
 }) {
-  const NEW = " new";
-  const known = projects.includes(value);
-  const showFreeText = allowNew && value !== "" && !known;
+  const NEW = "__new__";
+  const [isCreatingNew, setIsCreatingNew] = useState(false);
+
+  const isCustom = allowNew && value !== "" && !projects.includes(value);
+  const showFreeText = allowNew && (isCreatingNew || isCustom);
 
   return (
     <div className="stack" style={{ gap: 8 }}>
       <select
-        value={showFreeText ? NEW : value}
+        value={showFreeText ? NEW : (projects.includes(value) ? value : "")}
         onChange={(event) => {
           const next = event.target.value;
-          onChange(next === NEW ? " " : next);
+          if (next === NEW) {
+            setIsCreatingNew(true);
+            onChange("");
+          } else {
+            setIsCreatingNew(false);
+            onChange(next);
+          }
         }}
         aria-label="Project"
       >
@@ -107,10 +115,10 @@ export function ProjectPicker({
       {showFreeText && (
         <input
           type="text"
-          value={value.trim()}
+          value={value}
           autoFocus
           placeholder="New project name"
-          onChange={(event) => onChange(event.target.value || " ")}
+          onChange={(event) => onChange(event.target.value)}
           aria-label="New project name"
         />
       )}

@@ -252,14 +252,12 @@ export function Capture() {
           </Notice>
         )}
 
-        {!text && !saved && !queued && (
-          <div className="hero-hint-box">
-            <CaptureHero size={88} />
-            <p style={{ margin: "10px 0 0", color: "var(--muted)", fontSize: "0.88rem" }}>
-              💡 <em>Tip: Press <strong>Ctrl + Enter</strong> (or <strong>Cmd + Enter</strong>) to quickly save your note!</em>
-            </p>
-          </div>
-        )}
+        <div className="hero-hint-box">
+          <CaptureHero size={88} />
+          <p style={{ margin: "10px 0 0", color: "var(--muted)", fontSize: "0.88rem" }}>
+            💡 <em>Tip: Press <strong>Ctrl + Enter</strong> (or <strong>Cmd + Enter</strong>) to quickly save your note!</em>
+          </p>
+        </div>
       </div>
     </>
   );

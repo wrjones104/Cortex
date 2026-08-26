@@ -60,7 +60,7 @@ export function Settings() {
     <>
       <div className="page-head">
         <div>
-          <h1>Settings</h1>
+          <h1>Settings ⚙️</h1>
           <p>Which models do the work, and how your vault is doing.</p>
         </div>
       </div>

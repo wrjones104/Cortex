@@ -184,11 +184,12 @@ export function Chat() {
   return (
     <div className={`chat ${showList ? "chat-list-only" : "chat-open"}`}>
       <aside className="chat-threads">
-        <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
-          <h1 style={{ fontSize: "1.25rem", display: "flex", alignItems: "center", gap: 8 }}>
-            <span>💬 Conversations</span>
-          </h1>
-          <button className="primary bouncy-btn" onClick={() => void startThread()} type="button">
+        <div className="page-head row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <div>
+            <h1>Conversations 💬</h1>
+            <p>Talk with your vault and Librarian.</p>
+          </div>
+          <button className="primary bouncy-btn" onClick={() => void startThread()} type="button" style={{ flexShrink: 0, marginTop: 2 }}>
             + New
           </button>
         </div>

@@ -57,3 +57,4 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # options and dependencies. Not a bug in either case.
 "src/cortex/cli.py" = ["B008"]
 "src/cortex/api/app.py" = ["B008"]
+"src/cortex/api/deps.py" = ["B008"]

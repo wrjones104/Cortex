@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  clearConnection,
   errorMessage,
   type ModelInfo,
   type Settings as SettingsData,
@@ -9,9 +8,10 @@ import {
 import { useApi } from "../lib/useApi";
 import { Notice, Spinner } from "../components/ui";
 import { Projects } from "../components/Projects";
+import { Account } from "../components/Account";
 
 export function Settings() {
-  const { api, baseUrl, disconnect } = useApi();
+  const { api } = useApi();
 
   const [status, setStatus] = useState<Status | null>(null);
   const [settings, setSettings] = useState<SettingsData | null>(null);
@@ -61,7 +61,7 @@ export function Settings() {
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <p>Which models do the work, and how the vault is doing.</p>
+          <p>Which models do the work, and how your vault is doing.</p>
         </div>
       </div>
 
@@ -71,6 +71,9 @@ export function Settings() {
 
         <section className="stack">
           <h2>Models</h2>
+          <p style={{ margin: 0, fontSize: "0.84rem", color: "var(--muted)" }}>
+            Yours alone. Everyone with an account here picks their own.
+          </p>
 
           {modelsError && (
             <Notice kind="warn">
@@ -187,25 +190,7 @@ export function Settings() {
           )}
         </section>
 
-        <section className="stack">
-          <h2>Connection</h2>
-          <div className="card stack" style={{ gap: 10 }}>
-            <div style={{ fontFamily: "var(--mono)", fontSize: "0.85rem", wordBreak: "break-all" }}>
-              {baseUrl}
-            </div>
-            <div>
-              <button
-                type="button"
-                onClick={() => {
-                  clearConnection();
-                  disconnect();
-                }}
-              >
-                Disconnect
-              </button>
-            </div>
-          </div>
-        </section>
+        <Account />
       </div>
     </>
   );

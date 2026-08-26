@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { CortexApi, loadConnection, type Connection } from "./lib/api";
+import { CortexApi, clearConnection, loadConnection, type Connection } from "./lib/api";
 import { ApiContext, useApi } from "./lib/useApi";
 import { useSync } from "./lib/useSync";
-import { Setup } from "./screens/Setup";
+import { SignIn } from "./screens/SignIn";
 import { Capture } from "./screens/Capture";
 import { Vault } from "./screens/Vault";
 import { Chat } from "./screens/Chat";
@@ -15,20 +15,37 @@ import { Settings } from "./screens/Settings";
 export default function App() {
   const [connection, setConnection] = useState<Connection | null>(() => loadConnection());
 
+  /**
+   * Forget the session and go back to the sign-in screen.
+   *
+   * Called both by signing out on purpose and by any request coming back 401 -
+   * a session can end while the app is open, and an app that keeps rendering
+   * its shell around failing requests is worse than one that asks you to sign
+   * in again.
+   */
+  const disconnect = useCallback(() => {
+    clearConnection();
+    setConnection(null);
+  }, []);
 
   const value = useMemo(
     () =>
       connection
         ? {
-            api: new CortexApi(connection),
+            api: new CortexApi(connection, disconnect),
             baseUrl: connection.baseUrl,
-            disconnect: () => setConnection(null),
+            account: {
+              username: connection.username ?? "",
+              displayName: connection.displayName ?? "",
+              isOwner: connection.isOwner ?? false,
+            },
+            disconnect,
           }
         : null,
-    [connection],
+    [connection, disconnect],
   );
 
-  if (!value) return <Setup onConnected={setConnection} />;
+  if (!value) return <SignIn onConnected={setConnection} />;
 
   return (
     <ApiContext.Provider value={value}>

@@ -174,30 +174,181 @@ export interface SyncResponse {
   failed: number;
 }
 
+export interface Account {
+  id: number;
+  username: string;
+  display_name: string;
+  is_owner: boolean;
+  created_at: string;
+}
+
+export interface Me {
+  user: Account;
+  sessions: number;
+  needs_account: boolean;
+}
+
+export interface AuthState {
+  configured: boolean;
+  adopting_existing_vault: boolean;
+  requires_token: boolean;
+}
+
+export interface SessionResponse {
+  token: string;
+  expires_at: string;
+  user: Account;
+}
+
+/** A signed-in session: where the server is, and what proves who you are. */
 export interface Connection {
   baseUrl: string;
   token: string;
+  username?: string;
+  displayName?: string;
+  isOwner?: boolean;
+  expiresAt?: string;
 }
 
-const STORAGE_KEY = "cortex.connection";
+const STORAGE_KEY = "cortex.session";
+
+/**
+ * The key this used to be stored under, when the app asked for a token.
+ *
+ * Read once and carried across so that updating Cortex does not sign anybody
+ * out of a client they already had working. The token in there is the machine
+ * token, which still authenticates - as the owner.
+ */
+const LEGACY_STORAGE_KEY = "cortex.connection";
 
 export function loadConnection(): Connection | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Connection;
-    return parsed.baseUrl && parsed.token ? parsed : null;
-  } catch {
-    return null;
+  for (const key of [STORAGE_KEY, LEGACY_STORAGE_KEY]) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as Connection;
+      if (parsed.baseUrl && parsed.token) return parsed;
+    } catch {
+      /* try the next one */
+    }
   }
+  return null;
 }
 
 export function saveConnection(connection: Connection): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(connection));
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
 }
 
 export function clearConnection(): void {
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
+}
+
+/**
+ * Where to look for the server, best guess first.
+ *
+ * Cortex serves this app itself, so the page's own origin is nearly always
+ * right - and when it is, nobody has to type an address at all. The second
+ * guess covers development, where Vite serves the client on its own port and
+ * the API is on 8765 beside it.
+ */
+export function candidateBaseUrls(): string[] {
+  const origin = trimUrl(window.location.origin);
+  const guesses = [origin];
+  const beside = `${window.location.protocol}//${window.location.hostname}:8765`;
+  if (beside !== origin) guesses.push(beside);
+  return guesses;
+}
+
+/** The first candidate that answers as Cortex, or null if none do. */
+export async function discoverBaseUrl(): Promise<string | null> {
+  for (const candidate of candidateBaseUrls()) {
+    try {
+      const response = await fetch(`${candidate}/health`, {
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!response.ok) continue;
+      const body = await response.json();
+      if (body?.service === "cortex") return candidate;
+    } catch {
+      /* try the next */
+    }
+  }
+  return null;
+}
+
+async function post<T>(baseUrl: string, path: string, body: unknown, token?: string): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response: Response;
+  try {
+    response = await fetch(trimUrl(baseUrl) + path, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError(0, `Cannot reach Cortex at ${trimUrl(baseUrl)}. Is it running?`);
+  }
+  if (!response.ok) throw new ApiError(response.status, await describeFailure(response));
+  return (await response.json()) as T;
+}
+
+/** Whether this Cortex has an owner yet, and what claiming it would take. */
+export async function fetchAuthState(baseUrl: string): Promise<AuthState> {
+  let response: Response;
+  try {
+    response = await fetch(`${trimUrl(baseUrl)}/api/auth/state`);
+  } catch {
+    throw new ApiError(
+      0,
+      `Nothing answered at ${trimUrl(baseUrl)}. Check the address and that Cortex is running.`,
+    );
+  }
+  if (!response.ok) throw new ApiError(response.status, await describeFailure(response));
+  return (await response.json()) as AuthState;
+}
+
+export function signIn(
+  baseUrl: string,
+  username: string,
+  password: string,
+  device: string,
+): Promise<SessionResponse> {
+  return post<SessionResponse>(baseUrl, "/api/auth/login", { username, password, device });
+}
+
+/** Create the owner account. `token` is only needed to claim a vault with notes in it. */
+export function createOwner(
+  baseUrl: string,
+  body: { username: string; password: string; display_name?: string; device?: string },
+  token?: string,
+): Promise<SessionResponse> {
+  return post<SessionResponse>(baseUrl, "/api/auth/setup", body, token);
+}
+
+export function connectionOf(baseUrl: string, session: SessionResponse): Connection {
+  return {
+    baseUrl: trimUrl(baseUrl),
+    token: session.token,
+    username: session.user.username,
+    displayName: session.user.display_name,
+    isOwner: session.user.is_owner,
+    expiresAt: session.expires_at,
+  };
+}
+
+/** What to call this device in the signed-in list. A hint, not an identity. */
+export function deviceLabel(): string {
+  const agent = navigator.userAgent;
+  if (/iPhone|iPad|iPod/i.test(agent)) return "iPhone or iPad";
+  if (/Android/i.test(agent)) return "Android";
+  if (/Macintosh/i.test(agent)) return "Mac";
+  if (/Windows/i.test(agent)) return "Windows";
+  if (/Linux/i.test(agent)) return "Linux";
+  return "A browser";
 }
 
 /** An API error carrying the status, so callers can react to 401 or 409. */
@@ -254,8 +405,20 @@ async function describeFailure(response: Response): Promise<string> {
 export class CortexApi {
   private readonly connection: Connection;
 
-  constructor(connection: Connection) {
+  /**
+   * Called when the server stops accepting this session.
+   *
+   * A session can end while the app is open - it expires, another device
+   * revokes it, the password changes. Without this the app would keep
+   * rendering a shell around requests that all fail; with it, it returns to
+   * the sign-in screen the moment the server says who you are is no longer
+   * true.
+   */
+  private readonly onUnauthorized?: () => void;
+
+  constructor(connection: Connection, onUnauthorized?: () => void) {
     this.connection = connection;
+    this.onUnauthorized = onUnauthorized;
   }
 
   private get headers(): HeadersInit {
@@ -283,10 +446,46 @@ export class CortexApi {
     } catch {
       throw new ApiError(0, `Cannot reach Cortex at ${this.connection.baseUrl}. Is it running?`);
     }
-    if (!response.ok) throw new ApiError(response.status, await describeFailure(response));
+    if (!response.ok) {
+      if (response.status === 401) this.onUnauthorized?.();
+      throw new ApiError(response.status, await describeFailure(response));
+    }
     if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
   }
+
+  // --- account ------------------------------------------------------------
+
+  me = () => this.request<Me>("/api/auth/me");
+
+  logout = () => this.request<void>("/api/auth/logout", { method: "POST" });
+
+  revokeSessions = () =>
+    this.request<void>("/api/auth/sessions/revoke", { method: "POST" });
+
+  setDisplayName = (display_name: string) =>
+    this.request<Me>("/api/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify({ display_name }),
+    });
+
+  /** Change your own password. Every device signs out; the reply re-signs this one in. */
+  changePassword = (current_password: string, new_password: string) =>
+    this.request<SessionResponse>("/api/auth/password", {
+      method: "POST",
+      body: JSON.stringify({ current_password, new_password }),
+    });
+
+  accounts = () => this.request<Account[]>("/api/users");
+
+  createAccount = (body: { username: string; password: string; display_name?: string }) =>
+    this.request<Account>("/api/users", { method: "POST", body: JSON.stringify(body) });
+
+  deleteAccount = (id: number, purge = false) =>
+    this.request<void>(`/api/users/${id}`, {
+      method: "DELETE",
+      params: { purge: purge ? "true" : undefined },
+    });
 
   status = () => this.request<Status>("/api/status");
   projects = () => this.request<Project[]>("/api/projects");
@@ -541,7 +740,7 @@ export class CortexApi {
   }
 }
 
-/** Probe a server before saving it, so setup fails with a reason. */
+/** Probe a server before trying to sign in, so a bad address fails with a reason. */
 export async function verifyConnection(connection: Connection): Promise<void> {
   const base = trimUrl(connection.baseUrl);
   let health: Response;
@@ -555,6 +754,6 @@ export async function verifyConnection(connection: Connection): Promise<void> {
   const authed = await fetch(`${base}/api/status`, {
     headers: { Authorization: `Bearer ${connection.token}` },
   });
-  if (authed.status === 401) throw new ApiError(401, "That token was rejected. Run `cortex token` to see the right one.");
+  if (authed.status === 401) throw new ApiError(401, "That sign-in is no longer valid.");
   if (!authed.ok) throw new ApiError(authed.status, await describeFailure(authed));
 }

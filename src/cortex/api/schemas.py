@@ -282,3 +282,99 @@ class BankIn(BaseModel):
 class BankOut(BaseModel):
     banked: list[RecordOut]
     skipped: list[dict]
+
+
+# --- accounts -------------------------------------------------------------
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    display_name: str
+    is_owner: bool
+    created_at: str
+
+    @classmethod
+    def of(cls, user) -> UserOut:
+        return cls(
+            id=user.id,
+            username=user.username,
+            display_name=user.display_name,
+            is_owner=user.is_owner,
+            created_at=user.created_at,
+        )
+
+
+class AuthState(BaseModel):
+    """What the sign-in screen needs before anyone has typed anything."""
+
+    configured: bool = Field(
+        description="False when no account exists yet, so the client offers to "
+        "create the owner rather than asking for a password nobody has set."
+    )
+    adopting_existing_vault: bool = Field(
+        default=False,
+        description="True when a vault is already on disk from before accounts "
+        "existed. The first account created takes it over, notes intact.",
+    )
+    requires_token: bool = Field(
+        default=False,
+        description="True when claiming this Cortex needs the machine token as "
+        "well as a new password, because there are already notes in it to "
+        "claim. Run `cortex token` on the machine serving it.",
+    )
+
+
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    device: str = Field(
+        default="",
+        description="What to call this session in the signed-in device list.",
+    )
+
+
+class SetupIn(BaseModel):
+    """Creating the owner. Only accepted while no account exists."""
+
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    display_name: str = ""
+    device: str = ""
+
+
+class SessionOut(BaseModel):
+    token: str = Field(
+        description="Send as 'Authorization: Bearer <token>'. Store it; it is "
+        "not shown again."
+    )
+    expires_at: str
+    user: UserOut
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=1)
+
+
+class UserCreateIn(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    display_name: str = ""
+
+
+class ProfilePatch(BaseModel):
+    display_name: str | None = None
+
+
+class MeOut(BaseModel):
+    """The signed-in account, and what the client needs to reason about it."""
+
+    user: UserOut
+    sessions: int = Field(description="How many devices are signed in as this account.")
+    needs_account: bool = Field(
+        default=False,
+        description="True when the caller is holding the machine token on a "
+        "Cortex that has no accounts yet. Everything works, but nothing is "
+        "separated until an owner account is created.",
+    )

@@ -13,11 +13,35 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .. import __version__
+from ..accounts import (
+    OWNER_VAULT_FILE,
+    AuthError,
+    BadCredentialsError,
+    InvalidUsernameError,
+    UnknownUserError,
+    User,
+    UsernameTakenError,
+    WeakPasswordError,
+    authenticate,
+    count_users,
+    create_session,
+    create_user,
+    delete_user,
+    end_all_sessions,
+    end_session,
+    get_user,
+    list_users,
+    remove_vault,
+    rename_user,
+    session_count,
+    set_password,
+    verify_password,
+)
 from ..capture import capture as capture_note
 from ..chat import (
     Thread,
@@ -42,8 +66,10 @@ from ..creative import (
     list_generations,
     split,
 )
+from ..db import StoreError, connect
 from ..embed import EmbeddingError
 from ..llm import LibrarianError
+from ..migrations import migrate
 from ..retrieve import search as search_vault
 from ..settings import get_settings, installed_models, normalise_model, set_settings
 from ..store import (
@@ -68,6 +94,7 @@ from ..webui import find_web_dir, mount
 from . import deps
 from .schemas import (
     AskIn,
+    AuthState,
     BankIn,
     BankOut,
     CaptureIn,
@@ -75,9 +102,13 @@ from .schemas import (
     GenerateIn,
     GenerationOut,
     IdeaOut,
+    LoginIn,
+    MeOut,
     MessageOut,
     ModelInfo,
     ModelStatus,
+    PasswordChangeIn,
+    ProfilePatch,
     ProjectOut,
     ProjectPatch,
     RecordList,
@@ -85,8 +116,10 @@ from .schemas import (
     RecordPatch,
     SearchHitOut,
     SearchOut,
+    SessionOut,
     SettingsOut,
     SettingsPatch,
+    SetupIn,
     StatusOut,
     SyncIn,
     SyncOut,
@@ -95,6 +128,8 @@ from .schemas import (
     ThreadDetail,
     ThreadOut,
     ThreadPatch,
+    UserCreateIn,
+    UserOut,
 )
 
 
@@ -139,14 +174,292 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
 
     @app.get("/health", tags=["system"])
     def health() -> dict[str, str]:
-        """Reachability check. The only route that does not need a token."""
+        """Reachability check. Needs no credentials."""
         return {"status": "ok", "service": "cortex", "version": __version__}
+
+    @app.get("/api/auth/state", response_model=AuthState, tags=["auth"])
+    def get_auth_state(auth: sqlite3.Connection = Depends(deps.get_auth)) -> AuthState:
+        """What the sign-in screen needs before anyone has typed anything.
+
+        Unauthenticated by necessity: the client has to know whether to ask
+        for a password or to offer to create the first account, and it cannot
+        find that out by trying one and reading the failure.
+
+        It says nothing about who has an account here, only whether anybody
+        does.
+        """
+        if count_users(auth) > 0:
+            return AuthState(configured=True)
+
+        # No accounts yet. Whether claiming this Cortex needs the machine
+        # token depends on whether there is anything here worth claiming.
+        existing = deps.get_config().for_vault(OWNER_VAULT_FILE).db_path
+        populated = False
+        if existing.exists():
+            conn = connect(existing)
+            try:
+                migrate(conn)
+                populated = count_records(conn) > 0
+            except StoreError:
+                populated = True  # unreadable is not the same as empty
+            finally:
+                conn.close()
+
+        return AuthState(
+            configured=False,
+            adopting_existing_vault=populated,
+            requires_token=populated,
+        )
+
+    @app.post(
+        "/api/auth/setup",
+        response_model=SessionOut,
+        status_code=status.HTTP_201_CREATED,
+        tags=["auth"],
+    )
+    def post_setup(
+        body: SetupIn,
+        authorization: str | None = Header(default=None),
+        auth: sqlite3.Connection = Depends(deps.get_auth),
+    ) -> SessionOut:
+        """Create the owner account. Accepted only while there are none.
+
+        The owner adopts cortex.db, the vault that was there before accounts
+        existed, so upgrading an install leaves every note where it is.
+
+        On a fresh install this needs no credentials: there is nothing yet to
+        protect, and demanding a token to create the account whose whole
+        purpose is to replace the token would be a circle. On an install that
+        already holds notes it needs the machine token, because at that point
+        claiming this Cortex means claiming somebody's vault - and whoever is
+        entitled to do that can run `cortex token` on the machine serving it.
+        """
+        if count_users(auth) > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This Cortex already has an owner. Sign in instead.",
+            )
+
+        if get_auth_state(auth).requires_token and not deps.machine_token_matches(
+            authorization
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="This Cortex already holds notes, so claiming it needs "
+                "the machine token as well. Run `cortex token` on the machine "
+                "serving it.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        try:
+            user = create_user(
+                auth,
+                body.username,
+                body.password,
+                display_name=body.display_name,
+                is_owner=True,
+            )
+        except (InvalidUsernameError, WeakPasswordError, UsernameTakenError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        session = create_session(auth, user, label=body.device)
+        return SessionOut(
+            token=session.token, expires_at=session.expires_at, user=UserOut.of(user)
+        )
+
+    @app.post("/api/auth/login", response_model=SessionOut, tags=["auth"])
+    def post_login(
+        body: LoginIn, auth: sqlite3.Connection = Depends(deps.get_auth)
+    ) -> SessionOut:
+        """Exchange a username and password for a session token.
+
+        This is the point of the whole accounts change: a password can be
+        typed on a phone from memory, and a 43-character token cannot.
+        """
+        try:
+            user = authenticate(auth, body.username, body.password)
+        except BadCredentialsError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=str(exc),
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
+
+        session = create_session(auth, user, label=body.device)
+        return SessionOut(
+            token=session.token, expires_at=session.expires_at, user=UserOut.of(user)
+        )
+
+    @app.post(
+        "/api/auth/logout",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["auth"],
+        dependencies=[deps.Authed],
+    )
+    def post_logout(
+        token: str = Depends(deps.presented_token),
+        auth: sqlite3.Connection = Depends(deps.get_auth),
+    ) -> None:
+        """End this session. Other devices stay signed in.
+
+        A no-op when the caller holds the machine token: there is no session
+        row to delete, and a token on disk is not something a route should be
+        able to revoke.
+        """
+        end_session(auth, token)
+
+    @app.get("/api/auth/me", response_model=MeOut, tags=["auth"])
+    def get_me(
+        user: User = deps.CurrentUser,
+        auth: sqlite3.Connection = Depends(deps.get_auth),
+    ) -> MeOut:
+        return MeOut(
+            user=UserOut.of(user),
+            sessions=session_count(auth, user.id) if user.id else 0,
+            needs_account=user.id == 0,
+        )
+
+    @app.patch("/api/auth/me", response_model=MeOut, tags=["auth"])
+    def patch_me(
+        body: ProfilePatch,
+        user: User = deps.CurrentUser,
+        auth: sqlite3.Connection = Depends(deps.get_auth),
+    ) -> MeOut:
+        if user.id == 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="There is no account to edit yet. Create one first.",
+            )
+        if body.display_name is not None:
+            user = rename_user(auth, user.id, display_name=body.display_name)
+        return MeOut(
+            user=UserOut.of(user),
+            sessions=session_count(auth, user.id),
+            needs_account=False,
+        )
+
+    @app.post("/api/auth/password", response_model=SessionOut, tags=["auth"])
+    def post_password(
+        body: PasswordChangeIn,
+        user: User = deps.CurrentUser,
+        auth: sqlite3.Connection = Depends(deps.get_auth),
+    ) -> SessionOut:
+        """Change your own password.
+
+        Every session is dropped, this one included, and a fresh token comes
+        back for the device that did it. Changing a password is what somebody
+        does when they think the old one is known; leaving the other devices
+        signed in would make the act cosmetic.
+        """
+        if user.id == 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="There is no account to change a password on yet.",
+            )
+
+        row = auth.execute(
+            "SELECT password_hash FROM users WHERE id = ?", (user.id,)
+        ).fetchone()
+        if row is None or not verify_password(
+            body.current_password, row["password_hash"]
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="That is not your current password.",
+            )
+
+        try:
+            set_password(auth, user.id, body.new_password)
+        except WeakPasswordError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        session = create_session(auth, user, label="password change")
+        return SessionOut(
+            token=session.token, expires_at=session.expires_at, user=UserOut.of(user)
+        )
+
+    @app.post(
+        "/api/auth/sessions/revoke",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["auth"],
+    )
+    def post_revoke_sessions(
+        user: User = deps.CurrentUser,
+        auth: sqlite3.Connection = Depends(deps.get_auth),
+    ) -> None:
+        """Sign out every device, this one included. For a lost phone."""
+        if user.id:
+            end_all_sessions(auth, user.id)
+
+    # --- accounts ----------------------------------------------------------
+
+    @app.get("/api/users", response_model=list[UserOut], tags=["accounts"])
+    def get_users(
+        _owner: User = deps.Owner, auth: sqlite3.Connection = Depends(deps.get_auth)
+    ) -> list[UserOut]:
+        return [UserOut.of(u) for u in list_users(auth)]
+
+    @app.post(
+        "/api/users",
+        response_model=UserOut,
+        status_code=status.HTTP_201_CREATED,
+        tags=["accounts"],
+    )
+    def post_user(
+        body: UserCreateIn,
+        _owner: User = deps.Owner,
+        auth: sqlite3.Connection = Depends(deps.get_auth),
+    ) -> UserOut:
+        """Add an account. It starts with an empty vault of its own.
+
+        The vault file is created lazily, the first time that person captures
+        or searches something - the same path a fresh install takes, rather
+        than a second one that has to be kept working.
+        """
+        try:
+            user = create_user(
+                auth, body.username, body.password, display_name=body.display_name
+            )
+        except (InvalidUsernameError, WeakPasswordError, UsernameTakenError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return UserOut.of(user)
+
+    @app.delete(
+        "/api/users/{user_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        tags=["accounts"],
+    )
+    def remove_user(
+        user_id: int,
+        purge: bool = Query(
+            default=False,
+            description="Also delete their vault file. Off by default: a "
+            "removed account can be made again, and a deleted vault cannot.",
+        ),
+        _owner: User = deps.Owner,
+        auth: sqlite3.Connection = Depends(deps.get_auth),
+    ) -> None:
+        try:
+            target = get_user(auth, user_id)
+        except UnknownUserError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        try:
+            delete_user(auth, user_id)
+        except AuthError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        if purge:
+            remove_vault(deps.get_config().data_dir, target)
 
     # --- system ------------------------------------------------------------
 
     @app.get("/api/status", response_model=StatusOut, tags=["system"], dependencies=[deps.Authed])
-    def get_status(conn: sqlite3.Connection = Depends(deps.get_conn)) -> StatusOut:
-        config = deps.get_config()
+    def get_status(
+        conn: sqlite3.Connection = Depends(deps.get_conn),
+        user: User = Depends(deps.current_user),
+    ) -> StatusOut:
+        config = deps.config_for(user)
 
         reachable, detail, installed = True, None, set()
         try:
@@ -158,6 +471,7 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
             reachable = False
             detail = f"{type(exc).__name__}: {exc}"
 
+        settings = get_settings(conn, config)
         models = [
             ModelStatus(
                 role=role,
@@ -165,9 +479,9 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
                 installed=name in installed or f"{name}:latest" in installed,
             )
             for role, name in (
-                ("embed", config.embed_model),
-                ("librarian", config.librarian_model),
-                ("creative", config.creative_model),
+                ("embed", settings.embed_model),
+                ("librarian", settings.librarian_model),
+                ("creative", settings.creative_model),
             )
         ]
 
@@ -401,7 +715,9 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
         )
 
     @app.post("/api/records/stream", tags=["records"], dependencies=[deps.Authed])
-    def post_record_streaming(body: CaptureIn) -> StreamingResponse:
+    def post_record_streaming(
+        body: CaptureIn, user: User = Depends(deps.current_user)
+    ) -> StreamingResponse:
         """Same as POST /api/records, as server-sent events.
 
         Emits a `progress` event as each stage begins, then exactly one
@@ -416,7 +732,7 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
         The worker opens its own connection: SQLite objects belong to the
         thread that created them, so it cannot borrow the request's.
         """
-        config = deps.get_config()
+        config = deps.config_for(user)
 
         def events() -> Iterator[str]:
             def sse(event: str, payload: dict) -> str:
@@ -656,7 +972,9 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/threads/{thread_id}/messages", tags=["chat"], dependencies=[deps.Authed])
-    def post_message(thread_id: int, body: AskIn) -> StreamingResponse:
+    def post_message(
+        thread_id: int, body: AskIn, user: User = Depends(deps.current_user)
+    ) -> StreamingResponse:
         """Ask a question in a thread, as server-sent events.
 
         Emits `status` while it condenses, retrieves and compacts, then
@@ -667,7 +985,7 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
         feeding a queue - a local model takes long enough that collecting the
         events and flushing them at the end would defeat the point.
         """
-        config = deps.get_config()
+        config = deps.config_for(user)
 
         def events() -> Iterator[str]:
             def sse(event: str, payload: object) -> str:
@@ -781,7 +1099,9 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/generations", tags=["creative"], dependencies=[deps.Authed])
-    def post_generation(body: GenerateIn) -> StreamingResponse:
+    def post_generation(
+        body: GenerateIn, user: User = Depends(deps.current_user)
+    ) -> StreamingResponse:
         """Brainstorm, streamed as server-sent events.
 
         A 27B model takes around a minute to work up five developed
@@ -789,7 +1109,7 @@ def _register(app: FastAPI) -> None:  # noqa: C901 - a flat list of routes
         a client should show progress rather than the text - but showing
         nothing at all for a minute is worse.
         """
-        config = deps.get_config()
+        config = deps.config_for(user)
 
         def events() -> Iterator[str]:
             def sse(event: str, payload: object) -> str:

@@ -10,7 +10,7 @@ import contextlib
 import os
 import secrets
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 
@@ -37,6 +37,12 @@ def default_data_dir() -> Path:
 class Config:
     data_dir: Path = field(default_factory=default_data_dir)
     ollama_host: str = "http://127.0.0.1:11434"
+
+    # Which file under data_dir is the vault. One process serves several
+    # accounts, and each one gets its own; see accounts.py for why isolation
+    # is by file rather than by a user_id column. The default is the vault
+    # that existed before accounts did, which the owner adopts.
+    vault_file: str = "cortex.db"
 
     embed_model: str = "embeddinggemma"
     librarian_model: str = "qwen2.5:14b"
@@ -71,7 +77,15 @@ class Config:
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "cortex.db"
+        return self.data_dir / self.vault_file
+
+    def for_vault(self, vault_file: str) -> Config:
+        """The same configuration pointed at a different vault.
+
+        Model routing, chunking and the Ollama host are properties of the
+        server; which file is open is a property of who is asking.
+        """
+        return replace(self, vault_file=vault_file)
 
     @property
     def backup_dir(self) -> Path:

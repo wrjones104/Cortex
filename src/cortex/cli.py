@@ -13,6 +13,22 @@ from pathlib import Path
 import typer
 
 from . import __version__
+from .accounts import (
+    AuthError,
+    auth_db_path,
+    connect_auth,
+    count_users,
+    create_user,
+    delete_user,
+    end_all_sessions,
+    find_user,
+    list_users,
+    owner,
+    remove_vault,
+    session_count,
+    set_password,
+    vault_path,
+)
 from .capture import capture as capture_note
 from .config import Config
 from .embed import EmbeddingError
@@ -39,9 +55,55 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+# Set by the --user option below. The CLI opens one vault per invocation, so
+# module state is the honest representation: there is nothing concurrent here
+# to get it wrong.
+_active_user: str | None = None
+
+
+@app.callback()
+def main(
+    user: str | None = typer.Option(
+        None,
+        "--user",
+        "-u",
+        envvar="CORTEX_USER",
+        help="Whose vault to work in. Defaults to the owner's.",
+    ),
+) -> None:
+    """Cortex - a local-first AI knowledge vault."""
+    global _active_user
+    _active_user = user
+
 
 def _config() -> Config:
-    return Config.from_env()
+    """The configuration for whichever vault this invocation should open.
+
+    An install with no accounts opens cortex.db, exactly as it did before
+    accounts existed - the CLI is the tool that gets scripted, and a cron job
+    should not stop working because of a feature nobody has turned on yet.
+
+    Once there are accounts, the default is the owner's vault, and --user
+    picks somebody else's.
+    """
+    config = Config.from_env()
+
+    if _active_user is None and not auth_db_path(config.data_dir).exists():
+        return config
+
+    conn = connect_auth(config.data_dir)
+    try:
+        if _active_user:
+            user = find_user(conn, _active_user)
+            if user is None:
+                _fail(f"No account called '{_active_user}'. Try `cortex user list`.")
+        else:
+            user = owner(conn)
+            if user is None:
+                return config
+        return config.for_vault(user.vault_file)
+    finally:
+        conn.close()
 
 
 def _fail(message: str) -> None:
@@ -484,16 +546,207 @@ def doctor() -> None:
         typer.secho(f"  {label:<10} {name}{suffix}", fg=colour)
 
 
-if __name__ == "__main__":
-    app()
-
 
 @app.command()
 def token() -> None:
-    """Print the API token, creating one if this is the first run."""
+    """Print the machine API token, creating one on first run.
+
+    This is for scripts, cron jobs and curl. People sign in with a username
+    and password instead - a token is a miserable thing to type on a phone,
+    which is exactly why accounts exist.
+
+    The token acts as the owner, so it reaches the owner's vault and no one
+    else's.
+    """
     from .config import load_or_create_token
 
-    typer.echo(load_or_create_token(_config().data_dir))
+    typer.echo(load_or_create_token(Config.from_env().data_dir))
+
+
+# --- accounts -------------------------------------------------------------
+
+users_app = typer.Typer(
+    help="Manage who can sign in, and whose vault is whose.",
+    no_args_is_help=True,
+)
+app.add_typer(users_app, name="user")
+
+
+def _ask_password(prompt: str = "Password") -> str:
+    """Read a new password, asking twice when there is somebody there to ask.
+
+    A hidden prompt reads the console rather than stdin, so with stdin piped
+    it does not fail - it waits forever for a keystroke that is never coming.
+    A provisioning script or a container build calling this would simply hang.
+
+    So when stdin is not a terminal, take the password from it. That keeps it
+    off the command line, which matters: an argument is visible in shell
+    history and in the process list, and a password should be in neither.
+    """
+    if not sys.stdin.isatty():
+        password = sys.stdin.readline().rstrip("\r\n")
+        if not password:
+            _fail(
+                "No password arrived on stdin. Pipe one in, or run this in a "
+                "terminal to be prompted."
+            )
+        return password
+
+    return typer.prompt(prompt, hide_input=True, confirmation_prompt=True)
+
+
+@users_app.command("list")
+def user_list() -> None:
+    """Show every account, its vault, and how many devices are signed in."""
+    config = Config.from_env()
+    conn = connect_auth(config.data_dir)
+    try:
+        people = list_users(conn)
+        if not people:
+            typer.echo("No accounts yet.")
+            typer.echo(
+                "\nCreate the owner with `cortex user add <name>`, or open the "
+                "web app and it will ask."
+            )
+            return
+
+        for person in people:
+            label = f"{person.username}{'  (owner)' if person.is_owner else ''}"
+            typer.secho(label, fg=typer.colors.CYAN, bold=True)
+            if person.display_name:
+                typer.echo(f"  name     {person.display_name}")
+            typer.echo(f"  vault    {vault_path(config.data_dir, person)}")
+            typer.echo(f"  devices  {session_count(conn, person.id)} signed in")
+            typer.echo(f"  since    {_local_time(person.created_at)}")
+    finally:
+        conn.close()
+
+
+@users_app.command("add")
+def user_add(
+    username: str = typer.Argument(..., help="Lowercase, 2-32 characters."),
+    name: str = typer.Option("", "--name", help="Display name, if different."),
+) -> None:
+    """Create an account. The first one made is the owner.
+
+    The owner takes over the vault that is already there, so an install that
+    predates accounts keeps every note. Everyone after gets an empty vault of
+    their own, created the first time they capture something.
+    """
+    config = Config.from_env()
+    conn = connect_auth(config.data_dir)
+    try:
+        first = count_users(conn) == 0
+        if first:
+            typer.echo(
+                "This will be the owner account. It adopts the existing vault "
+                f"at {config.data_dir / 'cortex.db'} and can manage other accounts."
+            )
+        try:
+            person = create_user(
+                conn, username, _ask_password(), display_name=name, is_owner=None
+            )
+        except AuthError as exc:
+            _fail(str(exc))
+
+        typer.secho(
+            f"Created {person.username}{' (owner)' if person.is_owner else ''}.",
+            fg=typer.colors.GREEN,
+            bold=True,
+        )
+        typer.echo(f"  vault  {vault_path(config.data_dir, person)}")
+        typer.echo("\nSign in at the web app with that username and password.")
+    finally:
+        conn.close()
+
+
+@users_app.command("passwd")
+def user_passwd(
+    username: str = typer.Argument(..., help="Whose password to change."),
+) -> None:
+    """Set an account's password, signing out all of its devices.
+
+    The way back in for somebody who has forgotten theirs. It signs every
+    device out, because a password nobody knew until now should not leave old
+    sessions running.
+    """
+    config = Config.from_env()
+    conn = connect_auth(config.data_dir)
+    try:
+        person = find_user(conn, username)
+        if person is None:
+            _fail(f"No account called '{username}'.")
+
+        try:
+            set_password(conn, person.id, _ask_password("New password"))
+        except AuthError as exc:
+            _fail(str(exc))
+
+        typer.secho(f"Password changed for {person.username}.", fg=typer.colors.GREEN)
+        typer.echo("  Every device signed in as them has been signed out.")
+    finally:
+        conn.close()
+
+
+@users_app.command("logout")
+def user_logout(
+    username: str = typer.Argument(..., help="Whose devices to sign out."),
+) -> None:
+    """Sign out every device on an account. For a lost or stolen phone."""
+    config = Config.from_env()
+    conn = connect_auth(config.data_dir)
+    try:
+        person = find_user(conn, username)
+        if person is None:
+            _fail(f"No account called '{username}'.")
+        ended = end_all_sessions(conn, person.id)
+        typer.secho(
+            f"Signed out {ended} device{'s' if ended != 1 else ''} for "
+            f"{person.username}.",
+            fg=typer.colors.GREEN,
+        )
+    finally:
+        conn.close()
+
+
+@users_app.command("remove")
+def user_remove(
+    username: str = typer.Argument(..., help="Which account to remove."),
+    purge: bool = typer.Option(
+        False, "--purge", help="Delete their vault file too. This cannot be undone."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask."),
+) -> None:
+    """Remove an account. Their vault file is kept unless you say otherwise."""
+    config = Config.from_env()
+    conn = connect_auth(config.data_dir)
+    try:
+        person = find_user(conn, username)
+        if person is None:
+            _fail(f"No account called '{username}'.")
+
+        path = vault_path(config.data_dir, person)
+        if purge and not yes:
+            typer.secho(
+                f"This deletes {path} and every note in it. There is no undo.",
+                fg=typer.colors.RED,
+            )
+            typer.confirm(f"Really delete {person.username}'s vault?", abort=True)
+
+        try:
+            delete_user(conn, person.id)
+        except AuthError as exc:
+            _fail(str(exc))
+
+        typer.secho(f"Removed {person.username}.", fg=typer.colors.GREEN)
+        if purge:
+            for removed in remove_vault(config.data_dir, person):
+                typer.echo(f"  deleted  {removed}")
+        else:
+            typer.echo(f"  Their vault is still at {path}.")
+            typer.echo("  Remove it by hand, or use --purge next time.")
+    finally:
+        conn.close()
 
 
 @app.command()
@@ -518,7 +771,10 @@ def serve(
     from .setup_wizard import tailscale_address
     from .webui import find_web_dir
 
-    config = _config()
+    # Not _config(): serving is not working in one vault. The process binds to
+    # the data directory and picks the vault per request, from whoever signed
+    # in - see deps.config_for().
+    config = Config.from_env()
 
     if tailscale:
         address = tailscale_address()
@@ -543,8 +799,34 @@ def serve(
             fg=typer.colors.YELLOW,
         )
     typer.echo(f"  docs   http://{host}:{port}/docs")
-    typer.echo(f"  vault  {config.db_path}")
-    typer.echo(f"  token  {api_token}")
+    typer.echo(f"  data   {config.data_dir}")
+
+    # Who can get in, and how. This used to print the token as the way in,
+    # which meant getting 43 random characters onto a phone before you could
+    # write anything down on it.
+    auth_conn = connect_auth(config.data_dir)
+    try:
+        accounts = list_users(auth_conn)
+    finally:
+        auth_conn.close()
+
+    if accounts:
+        typer.echo(
+            f"  users  {len(accounts)} account{'s' if len(accounts) != 1 else ''}"
+            f" - sign in at the app"
+        )
+        for person in accounts:
+            typer.secho(
+                f"           {person.username}"
+                f"{'  (owner)' if person.is_owner else ''}",
+                fg=typer.colors.BRIGHT_BLACK,
+            )
+    else:
+        typer.secho(
+            "  users  none yet - open the app and it will ask you to make one",
+            fg=typer.colors.CYAN,
+        )
+    typer.secho(f"  token  {api_token}  (for scripts)", fg=typer.colors.BRIGHT_BLACK)
 
     if host in ("0.0.0.0", "::"):  # noqa: S104 - detecting it, not binding it
         typer.secho(
@@ -916,7 +1198,14 @@ def setup(
     typer.echo("  cortex capture \"a first thought\"     file something")
     typer.echo("  cortex serve                          open the web app")
     typer.echo("")
-    typer.secho(f"  Your API token: {token}", fg=typer.colors.BRIGHT_BLACK)
+    typer.echo(
+        "  The app will ask you to pick a username and a password on first open."
+    )
+    typer.echo(
+        "  That first account owns this vault, and the notes already in it."
+    )
+    typer.echo("")
+    typer.secho(f"  Machine token, for scripts: {token}", fg=typer.colors.BRIGHT_BLACK)
 
     address = tailscale_address()
     if address:
@@ -926,3 +1215,8 @@ def setup(
         typer.echo(
             f"  Open http://{address}:8765 on the phone and add it to your home screen."
         )
+        typer.echo("  Sign in there with the same username and password. Nothing to copy across.")
+
+
+if __name__ == "__main__":
+    app()

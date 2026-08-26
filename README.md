@@ -66,8 +66,8 @@ cortex setup
 ```
 
 `cortex setup` checks everything Cortex needs — the vault, Ollama, each configured
-model, and whether Ollama is exposed beyond your machine — offers to pull anything
-missing, and prints your API token.
+model, and whether Ollama is exposed beyond your machine — and offers to pull
+anything missing.
 
 ```bash
 cortex serve
@@ -76,7 +76,41 @@ cortex serve
 One command, one port. The API and the web app are served together at
 `http://127.0.0.1:8765`, so there is no second server and no CORS to think about.
 
+Open it and it asks you to pick a username and a password. That first account is
+the owner, and it takes over the vault already on disk — an install that predates
+accounts keeps every note.
+
 `cortex doctor` re-runs the checks any time.
+
+### Accounts
+
+Everyone who signs in gets their own vault: their own notes, projects,
+conversations and model settings. Nobody can see anyone else's.
+
+Separation is by file rather than by a column — each account's records, chunks,
+vectors and full-text index live in their own SQLite file under the data
+directory. There is no `WHERE user_id = ?` anywhere in the storage layer, so
+there is none to forget.
+
+```bash
+cortex user add alex          # prompts for a password
+cortex user list              # who exists, and where their vault is
+cortex user passwd alex       # reset it, signing out their devices
+cortex user logout alex       # for a lost phone
+cortex user remove alex       # keeps their vault unless you pass --purge
+```
+
+The owner can do the same from Settings in the web app. Only the owner can add
+accounts — an open sign-up form on something reachable over a tailnet is a door.
+
+Every command works in the owner's vault by default; `--user alex` or
+`CORTEX_USER=alex` picks somebody else's.
+
+### Reaching it from a phone
+
+There is nothing to type but a password. Cortex serves the web app itself, so the
+page already knows where its own API is, and signing in is a username and a
+password rather than a 43-character token copied across devices.
 
 ### After pulling changes
 
@@ -176,7 +210,8 @@ Searches by meaning and by keyword at once. Each result says which arm matched i
 | `cortex setup` | First run: check everything, pull what's missing |
 | `cortex doctor` | Check the vault, the model server, and its exposure |
 | `cortex serve` | Run the HTTP API |
-| `cortex token` | Print the API token |
+| `cortex token` | Print the machine token, for scripts |
+| `cortex user` | Add, list, remove accounts; reset passwords |
 
 ### Getting your writing out
 
@@ -204,12 +239,17 @@ CORTEX_EMBED_MODEL=nomic-embed-text cortex reindex
 cortex serve
 ```
 
-Serves on `http://127.0.0.1:8765` with interactive docs at `/docs`. The first run
-generates a bearer token and stores it next to the vault; `cortex token` prints it.
+Serves on `http://127.0.0.1:8765` with interactive docs at `/docs`.
 
 | Route | |
 |---|---|
-| `GET /health` | Reachability. The only route that needs no token |
+| `GET /health` | Reachability. Needs no credentials |
+| `GET /api/auth/state` | Whether this Cortex has an owner yet. Needs no credentials |
+| `POST /api/auth/setup` | Create the owner. Only while there are no accounts |
+| `POST /api/auth/login` | Username and password in, session token out |
+| `POST /api/auth/logout` · `/sessions/revoke` | End this session, or every session |
+| `GET/PATCH /api/auth/me` · `POST /api/auth/password` | Your account |
+| `GET/POST /api/users` · `DELETE /api/users/{id}` | Accounts. Owner only |
 | `GET /api/status` | Records, projects, index integrity, model availability |
 | `GET /api/projects` | Projects with their counts |
 | `GET /api/records` | List, filter by project, paginate |
@@ -225,7 +265,13 @@ generates a bearer token and stores it next to the vault; `cortex token` prints 
 | `POST /api/generations/{id}/bank` | File the chosen ideas, one record each |
 | `POST /api/sync` | Drain a batch of captures queued offline |
 
-Every route except `/health` needs `Authorization: Bearer <token>`.
+Every route except `/health` and the sign-in pair needs
+`Authorization: Bearer <token>`. Two kinds are accepted:
+
+- A **session token** from `POST /api/auth/login`. This is what the web and phone
+  clients use, and it is scoped to whoever signed in.
+- The **machine token** from `cortex token`, for scripts and cron. It acts as the
+  owner, so it reaches the owner's vault and nobody else's.
 
 ```bash
 curl -H "Authorization: Bearer $(cortex token)" "http://127.0.0.1:8765/api/search?q=lighthouse"
@@ -291,7 +337,7 @@ New-NetFirewallRule -DisplayName "Cortex on Tailscale" `
   -InterfaceAlias "Tailscale" -RemoteAddress 100.64.0.0/10 -Profile Private
 ```
 
-> **Check Ollama too.** Cortex requires a token on every route. Ollama requires
+> **Check Ollama too.** Cortex requires a sign-in on every route. Ollama requires
 > nothing — so an Ollama listening on `0.0.0.0` means anyone who can reach the machine
 > can use your models and read what is sent through them, whatever Cortex does.
 > `cortex doctor` tests this by actually calling Ollama on a non-loopback address and
@@ -358,6 +404,7 @@ server is unreachable.
 ```
 src/cortex/
   config.py       env-driven settings
+  accounts.py     users, sessions, password hashing, per-user vault files
   db.py           connections, extension loading, transactions
   migrations.py   schema, numbered forward migrations
   chunk.py        splitting note bodies for embedding
@@ -385,7 +432,7 @@ web/
     lib/api.ts    typed client, including the SSE reader
     lib/queue.ts  the offline capture queue (IndexedDB)
     lib/sync.ts   draining it, batched and idempotent
-    screens/      Capture, Vault, Chat, Create, Pending, Settings, Setup
+    screens/      Capture, Vault, Chat, Create, Pending, Settings, SignIn
     index.css     design tokens, mobile-first, both themes
 ```
 
